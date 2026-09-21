@@ -1,0 +1,37 @@
+{
+  "name": "opencode-block-proxy-artifacts",
+  "version": "0.1.0",
+  "description": "opencode plugin that hard-blocks hallucinated/dead file-proxy artifact URLs (Qwen regurgitation) before any tool dials out",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "hallucination",
+    "ssrf",
+    "privacy",
+    "qwen",
+    "aliyuncs"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./plugin/block-proxy-artifacts.ts",
+  "exports": {
+    ".": "./plugin/block-proxy-artifacts.ts"
+  },
+  "files": [
+    "plugin/block-proxy-artifacts.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.0.0",
+    "@types/node": "^26.6.2",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=23.6"
+  }
+}
