@@ -179,6 +179,10 @@ The plugin fences the dial. What actually addresses the attempts themselves:
    sampling (e.g. vLLM) can make the host token unemittable — zero attempts,
    zero pollution — at the cost of also blocking legitimate mentions in that
    model alias (you could not edit this README from such a session).
+   Caveat measured 2026-09-26: on vLLM **with speculative decoding enabled**,
+   `logit_bias`/`min_p` are rejected outright and `bad_words` is silently
+   accepted but never applied — masking requires a spec-decode-disabled
+   serving path (verify with a smoke test before trusting any deployment).
 4. **Calibration:** every observed incident came from small quantized models;
    a better-calibrated serving choice reduces spontaneous regurgitation.
 
@@ -238,6 +242,15 @@ Measured against the real incidents plus controlled test runs:
 | Enforcement probes post-install (fetch, bash, and a `question` tool call quoting the host) | 0 | **4/4 blocked** |
 | **Live field catch** — successor research session to one incident, spontaneous (no priming) | **0** | **5/5 blocked** |
 | Narrowed single-rule build, fresh-instance probes (09-26) | incident shape: 0 | **1/1 blocked**; unseen variant host deliberately passed to the network |
+| **Gateway-bypass control (09-26)** — opencode pointed directly at the vLLM backend, LiteLLM removed from the path (all LLM steps log-confirmed `provider=vllm`); 2 crawl runs incl. subagents | **0** | **61/61 blocked** |
+
+The bypass control matters for attribution: with no LiteLLM/middleware anywhere
+near the traffic, the model still spontaneously fabricated 61 relay-shaped dials
+across the two runs, every one a fresh decode-layer generation (zero
+proxy-shaped traces in any session's stored history before the first dial). The
+attempts come from the model weights under context pressure, not from any
+proxy, gateway, or middleware — no amount of re-routing prevents them, which is
+exactly why an agent-layer fence is the right place for this defense.
 
 The field catch (09-22): a long-lived research session re-entered the failure
 mode on its own and fabricated **five** fresh proxy URLs over six hours — new
