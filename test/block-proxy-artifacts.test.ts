@@ -44,11 +44,9 @@ function nest(depth: number, leaf: unknown): unknown {
   return v
 }
 
-test("fixtures: blocklist order and dead URL matching", () => {
-  assert.equal(BLOCKED.length, 2)
+test("fixtures: single exact-host rule blocks the dead URL", () => {
+  assert.equal(BLOCKED.length, 1)
   assert.ok(BLOCKED.every((b) => b.why.length > 0))
-  // Rule 1 is the exact incident host and must be listed first (rule 2, the
-  // host token, is a superset — order decides the reported "why").
   const hit = findBlocked(DEAD_URL)
   assert.ok(hit)
   assert.equal(hit.why, "observed incident host (dead relay bucket)")
@@ -71,27 +69,29 @@ test("strings(): depth cap is 6 container levels", () => {
   assert.ok(![...strings(nest(7, "leaf"))].includes("leaf"))
 })
 
-test("findBlocked(): layered rules, case-insensitively", () => {
+test("findBlocked(): exact-host rule, case-insensitive; variants pass by design", () => {
   const INCIDENT = "observed incident host (dead relay bucket)"
-  const VARIANT = "relay host token (template variant of observed incident host)"
   assert.equal(findBlocked(DEAD_URL)?.why, INCIDENT)
   assert.equal(findBlocked(DEAD_URL.toUpperCase())?.why, INCIDENT)
 
-  // Template-drift insurance: separator variants, other regions, and other
-  // domains sharing the host token fall through to rule 2.
+  // Deliberate under-inclusion: across 169 recorded dials every attempt hit
+  // the exact incident host, so the former relay-host-token rule (which also
+  // caught separator/region variants) was retired — it added no unique catch
+  // and would over-fire on gateway-ops text mentioning the token. If template
+  // drift is ever observed, re-add the token rule (plugin header explains
+  // how); until then, unseen variant hosts must pass through cleanly.
   const underscoreHost = [
     "https://routify",
     "_file",
     "_proxy-sg.example.org/download",
   ].join("")
-  assert.equal(findBlocked(underscoreHost)?.why, VARIANT)
-
   const otherRegion = [
     "https://routify",
     "-file",
     "-proxy-hz.example.net/download",
   ].join("")
-  assert.equal(findBlocked(otherRegion)?.why, VARIANT)
+  assert.equal(findBlocked(underscoreHost), null)
+  assert.equal(findBlocked(otherRegion), null)
 })
 
 test("findBlocked(): passes legitimate and near-miss input", () => {
@@ -166,6 +166,23 @@ test("tool.execute.before: lets clean calls through untouched", async () => {
   }
   await hook(input, { args: undefined })
   await hook(input, { args: {} })
+})
+
+test("tool.execute.before: full guidance once per session, terse repeats", async () => {
+  const hook = await beforeHook()
+  const args = { url: DEAD_URL }
+  const mk = (sessionID: string) => ({ tool: "webfetch", sessionID, callID: "c" })
+  const FULL_MARKER = "Go back to the original publisher URL"
+
+  // First occurrence in s1: full teaching guidance.
+  await assert.rejects(hook(mk("s1"), { args }), (e: unknown) => String(e).includes(FULL_MARKER))
+  // Repeat in s1: still blocked, terse, but keeps the anti-retry instruction.
+  await assert.rejects(
+    hook(mk("s1"), { args }),
+    (e: unknown) => !String(e).includes(FULL_MARKER) && String(e).includes("Do NOT retry"),
+  )
+  // A different session still gets full guidance.
+  await assert.rejects(hook(mk("s2"), { args }), (e: unknown) => String(e).includes(FULL_MARKER))
 })
 
 test("self-compatibility: blocklist never matches the plugin's own sources", () => {

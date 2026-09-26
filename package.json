@@ -19,6 +19,7 @@
   },
   "files": [
     "plugin/block-proxy-artifacts.ts",
+    "tools/blocks-by-session.py",
     "README.md",
     "LICENSE"
   ],

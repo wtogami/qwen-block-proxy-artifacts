@@ -2,14 +2,24 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // Hallucinated file-proxy artifact URLs. Small quantized Qwen models
 // regurgitate signed Aliyun OSS "file proxy" links from their pretraining
-// data. Local forensics across every recorded session: 31 dialed attempts in
-// 3 sessions on 3 different dates, every one targeting the exact incident
-// host below (only trace/request/hash/date segments were re-synthesized each
-// time). Rule 1 blocks that host exactly; rule 2 keeps the host token as
-// insurance against template drift (region/bucket mutations). A generic
-// aliyuncs path rule was evaluated and dropped: it never fired alone in any
-// incident, and it would block legitimate relay operators' own
-// proxy_temp_file objects, which can validly return 200.
+// data. Local forensics across every recorded session — 169 dialed attempts
+// (real incidents, field catches, controlled crawl-burst repros): every one
+// targeted the exact incident host below; only trace/request/hash/date
+// segments were re-synthesized each time. The blocklist is therefore that
+// host alone.
+//
+// Two broader rules were evaluated and retired: a generic aliyuncs path rule
+// (never fired alone; it would block legitimate relay operators' own
+// proxy_temp_file objects, which can validly return 200) and a bare
+// relay-host-token rule (caught nothing the exact-host rule missed while
+// every observed dial already contained the full host; it would over-fire on
+// tool calls touching gateway-ops code that legitimately mentions the token).
+// If a gateway ever mutates the link template (new region/bucket/host),
+// widen by re-adding:
+//   { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token" }
+// Measurement deliberately stays broad: tools/blocks-by-session.py still
+// counts token-shaped mentions and leaks, so any novel shape this narrowed
+// fence lets through surfaces in the tracker.
 //
 // Self-compatibility note: the regex sources below are deliberately written
 // with character classes so that this file's own text does not match the
@@ -25,7 +35,6 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 const BLOCKED: { pattern: RegExp; why: string }[] = [
   { pattern: /routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com/i, why: "observed incident host (dead relay bucket)" },
-  { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token (template variant of observed incident host)" },
 ]
 
 function* strings(v: unknown, depth = 0): Generator<string> {
@@ -45,20 +54,37 @@ function findBlocked(args: unknown): { pattern: RegExp; why: string } | null {
   return null
 }
 
+const FULL_GUIDANCE =
+  `This URL is a dead upload-proxy artifact from a third-party gateway, not a real ` +
+  `content source: it cannot be fetched and retrying leaks trace identifiers. ` +
+  `Do NOT retry it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov, ` +
+  `pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`
+
+// Repeat occurrences in the same session get a one-liner: the full guidance is
+// what drove good self-corrections in the field, but re-injecting ~200 tokens
+// per recurrence pollutes the context it is trying to protect.
+const TERSE_GUIDANCE =
+  `Dead upload-proxy artifact from a third-party gateway. Do NOT retry it. ` +
+  `Fetch the original publisher URL directly.`
+
+// Server-process-scale cap; clearing wholesale is fine at this size.
+const WARNED_CAP = 500
+
 const blockProxy = Object.assign(
   (async () => {
+    const warned = new Map<string, boolean>()
     return {
-      "tool.execute.before": async (_input, output) => {
+      "tool.execute.before": async (input, output) => {
         const hit = findBlocked(output.args)
-        if (hit) {
-          throw new Error(
-            `Blocked by block-proxy-artifacts policy (${hit.why}). ` +
-            `This URL is a dead upload-proxy artifact from a third-party gateway, not a real ` +
-            `content source: it cannot be fetched and retrying leaks trace identifiers. ` +
-            `Do NOT retry it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov, ` +
-            `pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`,
-          )
-        }
+        if (!hit) return
+        const session = input.sessionID ?? "unknown"
+        const first = !warned.has(session)
+        if (warned.size > WARNED_CAP) warned.clear()
+        warned.set(session, true)
+        throw new Error(
+          `Blocked by block-proxy-artifacts policy (${hit.why}). ` +
+          (first ? FULL_GUIDANCE : TERSE_GUIDANCE),
+        )
       },
     }
   }) satisfies Plugin,
