@@ -183,8 +183,16 @@ The plugin fences the dial. What actually addresses the attempts themselves:
    `logit_bias`/`min_p` are rejected outright and `bad_words` is silently
    accepted but never applied — masking requires a spec-decode-disabled
    serving path (verify with a smoke test before trusting any deployment).
-4. **Calibration:** every observed incident came from small quantized models;
-   a better-calibrated serving choice reduces spontaneous regurgitation.
+4. **Calibration:** every observed incident and repro came from an
+   *aggressively quantized* build of one model family — nvfp4 on sglang for
+   the original incidents, EXL3 K4.25 on vLLM for the controlled repros. The
+   memorized URL template is therefore weights-level (it survives two
+   unrelated quantization schemes and engines); quantization sets the rate
+   and rigidity of leakage, not the presence of the shape. A higher-precision
+   serving choice should **reduce but not eliminate** spontaneous
+   regurgitation — unquantized builds presumably still know the template and
+   could sample it under enough context pressure; this has not been tested
+   on the full-precision original.
 
 ## Limitations (read before trusting it)
 
