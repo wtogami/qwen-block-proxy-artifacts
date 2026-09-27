@@ -2,11 +2,11 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // Hallucinated file-proxy artifact URLs. Small quantized Qwen models
 // regurgitate signed Aliyun OSS "file proxy" links from their pretraining
-// data. Across 370 recorded dials (as of 2026-09-27) every attempt targeted
-// one relay bucket label, `routify-file-proxy-sg`, spelled in one of Aliyun
-// OSS's two DOCUMENTED endpoint formats:
-//   public     <bucket>.oss-<region>.aliyuncs.com   (364 dials)
-//   dual-stack <bucket>.<region>.oss.aliyuncs.com   (2 dials)
+// data. Across 371 recorded dials (as of 2026-09-27) every real attempt
+// targeted one relay bucket label, `routify-file-proxy-sg`, spelled in one of
+// Aliyun OSS's two DOCUMENTED endpoint formats:
+//   public     <bucket>.oss-<region>.aliyuncs.com   (365 dials)
+//   dual-stack <bucket>.<region>.oss.aliyuncs.com   (2 fabrications + 1 probe)
 // with only the trace/request/hash/date segments re-synthesized each time.
 // Rule 1 pins the exact incident host. Rule 2 covers the relay bucket label
 // on *any* OSS endpoint form (dual-stack, internal, ...) — the dual-stack

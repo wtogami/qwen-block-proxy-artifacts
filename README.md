@@ -77,8 +77,8 @@ levels — against a small blocklist:
 
 | Pattern (case-insensitive)                                          | Catches                                                     |
 | ------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — 364 of 370 recorded dials (as of 2026-09-27) |
-| `routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com` | the same relay bucket label on **any** Aliyun OSS endpoint form — public, dual-stack, internal (the other 2 dials) |
+| `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — 365 of the 371 recorded dials (as of 2026-09-27) |
+| `routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com` | the same relay bucket label on **any** Aliyun OSS endpoint form — public, dual-stack, internal (the 2 dual-stack-form dials + the 09-27 acceptance probe) |
 
 A match throws — the tool never executes — with an error written to break the
 retry loop, not just fail the call:
@@ -94,12 +94,15 @@ reliably produced one-step self-correction); repeats get a one-liner that keeps
 "Do NOT retry" without re-injecting ~200 tokens into the very context the
 plugin protects.
 
-**Why two rules, both host-anchored.** All 370 recorded dials — incidents,
-field catches, controlled crawl-burst repros — targeted the same relay bucket
-label, `routify-file-proxy-sg`: 364 via the public endpoint spelling, and —
-caught on camera 2026-09-26 under maximum forced-wall load — 2 via the
-**dual-stack** spelling (`...sg.ap-southeast-1.oss.aliyuncs.com`). The
-dual-stack form is not a typo escape: Alibaba's own docs define
+**Why two rules, both host-anchored.** Of the 371 recorded dials, 368 hit
+the same relay bucket label, `routify-file-proxy-sg` — 365 via the public
+endpoint spelling, and — caught on camera 2026-09-26 under maximum
+forced-wall load — 2 via the **dual-stack** spelling
+(`...sg.ap-southeast-1.oss.aliyuncs.com`), plus 09-27's acceptance probe
+against that same shape. The remaining 3 recorded dials are a deliberate
+variant probe that passes by design and two known heredoc self-count
+false positives (see Trend tracking). The dual-stack form is not a typo
+escape: Alibaba's own docs define
 `<bucket>.<region>.oss.aliyuncs.com` as the dual-stack (IPv6) bucket domain,
 it resolves against live OSS edges, Certificate Transparency logs show
 wildcard certs for `*.ap-southeast-1.oss.aliyuncs.com`, and the two recorded
@@ -236,8 +239,8 @@ tested:
 
 ## Validation
 
-Measured against the real incidents plus controlled test runs (ledger: 370
-dials, 227 blocked, 143 reached the network, as of 2026-09-27 — of the 143,
+Measured against the real incidents plus controlled test runs (ledger: 371
+dials, 228 blocked, 143 reached the network, as of 2026-09-27 — of the 143,
 107 are deliberate unshielded dials from the reproducer's `--pure` raw mode
 below, by design; see Trend tracking for the rest):
 
@@ -306,11 +309,12 @@ loader-contract test caught the class of bug.
 
 **Trend tracking.** `python3 tools/blocks-by-session.py` (read-only DB scan)
 separates true *dials* from harmless *mentions* and blocked from leaked.
-Ledger 2026-09-27: 370 dials / 227 blocked / **143 leaked** — 31 during the
-real incidents, 5 in test/diagnostic windows (including one deliberate
-acceptance probe against an unroutable host), and 107 intentionally produced
-by the reproducer's `--pure` raw mode (that is the point of raw mode: the
-dials must reach the network). Watch the non-reproducer leaked column stay
+Ledger 2026-09-27: 371 dials / 228 blocked / **143 leaked** — 31 during the
+real incidents, 5 in test/diagnostic windows (including the deliberate
+acceptance probe against an unroutable host, and 2 known analysis-heredoc
+self-counts), and 107 intentionally produced by the reproducer's `--pure`
+raw mode (that is the point of raw mode: the dials must reach the network).
+Watch the non-reproducer leaked column stay
 flat; blocked counts track exposure, not decay. The script docstring lists
 heuristic caveats (analysis heredocs quoting "curl" can self-count as dials).
 
