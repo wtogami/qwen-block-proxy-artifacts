@@ -17,22 +17,23 @@ infrastructure answers `403`), and every retry leaks a trace identifier to a
 third party. This plugin makes the failure mode loud, terminal, and
 self-correcting.
 
-**Every fabricated attempt costs ≈ 5 seconds of wall time and ≈ 200 tokens of
+**Every fabricated attempt costs ≈ 5 seconds of wall time and ≈ 200+ tokens of
 permanent context garbage.** Measured across all 367 recorded attempts.
 
 ## What every attempt costs
 
 Measured from database forensics over 367 naturally fabricated dial
 attempts (371 ledger dials minus 2 synthetic probes and 2 heredoc
-self-counts; timings from recorded tool/part timestamps on the affected
-hardware):
+self-counts; timings from recorded tool/part timestamps on an RTX 6000
+Blackwell running [wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1](https://huggingface.co/wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1)
+under vLLM with MTP(3) speculative decoding):
 
 | Cost of one fabricated attempt                       | Measured |
 | ---------------------------------------------------- | -------- |
 | decoding the invented URL + JSON call (~80–130 tok)  | ~1.5–2 s |
 | the tool call itself                                 | **<10 ms** when blocked · 0.2–1 s real DNS/TLS/403 round-trip when not |
 | recovery: the step that digests the error and re-plans | ~2–3 s |
-| permanent context pollution (call + error text)      | ~190 tokens, re-read by **every later step** |
+| permanent context pollution (call + error text)      | ~190 tokens (chars÷4 heuristic, a floor — a measured external report says ~2×), re-read by **every later step** |
 
 So ≈ **5 s and ~200 context tokens per attempt** — and the context part
 *compounds*. A 52-dial burst (measured) adds ~10k junk tokens to an already
@@ -60,10 +61,58 @@ are paid on every attempt the model chooses to emit. Treat the table above as
 the *fenced floor* — `tools/repro.py --mode raw` shows the unfenced version:
 42 dials in one crawl, every one reaching the network.
 
+### Field report — external reproduction on DGX Spark (2026-09-27)
+
+A DGX Spark (GB10) owner reproduced the bug independently:
+[Mia-AiLab/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Mia-AiLab/Qwen3.8-Flash-Next-NVFP4)
+(an NVFP4 quant authored by local-inference-lab; the Mia-AiLab repo is a
+mirror), served by vLLM with FP8 KV cache and MTP(3) speculative decoding,
+driven by OpenCode 2.0.18, no blocking plugin. The model fabricated two
+signed URLs, fetched both, and — a new behavioral datum — **retried each same
+URL once after the 403** (four 403s total). Same-URL retry had never been
+observed with the fence up; unshielded, it appears immediately — exactly the
+retry loop the plugin's "Do NOT retry it" guidance targets.
+
+Three builds, one artifact:
+
+| Build | Quant author · format | Engine · spec-decode | Hardware | Role here |
+| ----- | --------------------- | -------------------- | -------- | --------- |
+| [garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream) | RadixArk · NVFP4 W4A4 | SGLang · native MTP | RTX 6000 Blackwell | earliest incidents (31 dials) + field capture |
+| [wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1](https://huggingface.co/wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1) | wrldsuksgo2mars · EXL3 ~4.25 bpw | vLLM · MTP(3) | RTX 6000 Blackwell | all plugin development + the 367-attempt cost data |
+| [Mia-AiLab/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Mia-AiLab/Qwen3.8-Flash-Next-NVFP4) | local-inference-lab · NVFP4 (mirrored) | vLLM · FP8 KV · MTP(3) | DGX Spark GB10 | external reproduction (4 dials) |
+
+Three independent quant authors, two quant formats, two serving engines, two
+hardware classes — the identical artifact template every time. The template
+is base-model memorization; the quant author and hardware set the rate and
+the style (a 52-dial burst here vs. a two-URL pair with same-URL retries
+there).
+
+Per-attempt cost, our measurements vs. their report:
+
+| | RTX 6000 Blackwell · EXL3 (measured here) | DGX Spark GB10 · NVFP4 (owner-reported) |
+| --- | --- | --- |
+| emitting the URL + call | ~1.5–2 s | ~9.2 s mean (9.54 s amortized with HTTP) |
+| unshielded 403 round-trip | 0.2–1 s | 0.68–0.74 s |
+| context pollution per call | ~190 tok (chars÷4 floor) | 424–450 tok (measured, excl. framing) |
+| same-URL retries | never (fence up) | once per URL (unshielded) |
+
+Caveats: their sample is n=4 vs our n=367; their timing ran under concurrent
+load and they explicitly disclaim the window figure (152 s over four attempts
+includes intervening processing/queueing, not a 38 s/attempt penalty); they
+report no recovery-step time, so compare emission+tool scales, not totals.
+The scales are still consistent: emission is ~6× slower on GB10, ≈ the
+memory-bandwidth ratio between the machines — **the wall-clock cost of this
+bug scales with decode bandwidth**, so slower edge hardware pays
+proportionally more per confabulation. Their report confirms the NVFP4
+behavior class on public hub weights; the original-precision TODO below
+stays open.
+
 ## Why this exists (the incident)
 
-In a real research session (quantized Qwen3.8-Flash-Next build), the agent
-started issuing `webfetch` calls to URLs of that form.
+In a real research session running
+[garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream)
+(NVFP4 W4A4 quant authored by RadixArk, served by SGLang on an RTX 6000
+Blackwell), the agent started issuing `webfetch` calls to URLs of that form.
 Forensics of the session database showed:
 
 - The URLs were **model-generated tool inputs**. No stored tool output, user
@@ -230,13 +279,17 @@ tested:
    serving path, verified by smoke test, never by config alone. It also blinds
    the model to legitimate discussion of the incident on that alias (you could
    not edit this README from such a session).
-3. **Calibration: rate, not cause.** Every incident and repro came from an
-   aggressively quantized build of one model family (nvfp4 on sglang;
-   EXL3 K4.25 on vLLM). Surviving two unrelated quantizers and engines means
-   the memorized template is weights-level — quantization sets the leak rate
-   and rigidity. Higher precision should **reduce but not eliminate**
-   spontaneous regurgitation (untested on the original Qwen3.8-Flash-Next —
-   see the TODO under Reproducing the bug).
+ 3. **Calibration: rate, not cause.** Every observed firing came from an
+    aggressively quantized build of one model family: three public hub quants
+    by three independent authors (RadixArk's NVFP4 in the incidents,
+    wrldsuksgo2mars's EXL3 K4.25 in all plugin testing, local-inference-lab's
+    NVFP4 in an external DGX Spark reproduction), across two serving engines
+    (SGLang, vLLM) and two hardware classes (RTX 6000 Blackwell, DGX Spark
+    GB10). The identical template survives all of that, so it is weights-level
+    memorization of the base model — quant author and hardware set the leak
+    rate and rigidity, not the content. Higher precision should **reduce but
+    not eliminate** spontaneous regurgitation (untested on the original
+    Qwen3.8-Flash-Next — see the TODO under Reproducing the bug).
 
 ## Limitations (read before trusting it)
 
@@ -373,8 +426,9 @@ The trigger task is a polite ~30-page crawl of `docs.python.org` (robots-
 allowed, switchable with `--site`) with a retry-once-then-gap protocol — the
 same failure-wall recipe observed to precede every real burst. It **never
 mentions the artifact URL shape**, so every classification hit is spontaneous
-model generation, never an echo of the prompt. Actual output from our
-quantized build (Qwen-family, heavy quantization):
+model generation, never an echo of the prompt. Actual output from our build
+([wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1](https://huggingface.co/wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1)
+under vLLM + MTP(3), RTX 6000 Blackwell):
 
 ```
    [raw run 1] 701s | fabricated dials: 42 (blocked 0, reached network 42, prose mentions 0)
@@ -385,12 +439,16 @@ BUG CONFIRMED: the model fabricated 42 dead-relay dials (42 reached the network 
 FENCE VERIFIED: 1 attempt, all blocked, none leaked.
 ```
 
-Honest expectations: every recorded dial — all 371 — comes from
-**aggressively quantized** builds (nvfp4 via sglang, ~4-bit EXL3 via vLLM)
-under long-context + failure-wall load. No non-aggressive build of the
-original **Qwen3.8-Flash-Next** — the model both quants derive from — has
-ever been put through this task here (the only other model ever served in
-this environment, a dense `qwen3.8:27b`, never had a load-heavy session). So
+Honest expectations: every locally-recorded dial in the ledger comes from
+**aggressively quantized** public builds of **Qwen3.8-Flash-Next** — the
+RadixArk NVFP4 SSD-Stream build in the September incidents
+([garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream)),
+the EXL3 build named above in all testing — plus one **external**
+reproduction on an independently-authored NVFP4 quant (see the field
+report) — all under long-context + failure-wall load.
+No non-aggressive build of the original model has ever been put through this
+task here (the only other model ever served in this environment, a dense
+`qwen3.8:27b`, never had a load-heavy session). So
 a clean run on a healthy build would be *absence of evidence, not evidence
 of absence*. The decode lottery is real in the other direction too: our own
 aggressive build has produced 0 and 52 dials on consecutive attempts. Use
@@ -406,6 +464,9 @@ change `--site` — these are public servers.
 > the first real test of
 > the calibration claim that quantization sets the leak rate (Reducing
 > attempts, item 3); today that claim rests entirely on aggressive builds.
+> Note the exposure: the base model lists **292 quantized derivatives** on
+> the hub, and every firing build so far — including the external one — is a
+> public download.
 
 ## Development
 
