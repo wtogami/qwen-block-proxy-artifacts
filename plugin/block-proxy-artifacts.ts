@@ -18,7 +18,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 //
 // Retired rules: a generic aliyuncs path rule (would block legitimate relay
 // operators' own proxy_temp_file objects, which can validly return 200) and
-// a bare relay-host-token rule (over-fires on gateway-ops code and incident
+// a bare relay-host-token rule (over-fires on relay-ops code and incident
 // writeups, and blocks self-documentation; its only unique catch beyond
 // rule 2 is separator-mutated bucket labels — re-add if ever observed:
 //   { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token" }
@@ -61,7 +61,7 @@ function findBlocked(args: unknown): { pattern: RegExp; why: string } | null {
 }
 
 const FULL_GUIDANCE =
-  `This URL is a dead upload-proxy artifact from a third-party gateway, not a real ` +
+  `This URL is a dead upload-proxy artifact from a third-party relay middlebox, not a real ` +
   `content source: it cannot be fetched and retrying leaks trace identifiers. ` +
   `Do NOT retry it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov, ` +
   `pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`
@@ -70,7 +70,7 @@ const FULL_GUIDANCE =
 // what drove good self-corrections in the field, but re-injecting ~200 tokens
 // per recurrence pollutes the context it is trying to protect.
 const TERSE_GUIDANCE =
-  `Dead upload-proxy artifact from a third-party gateway. Do NOT retry it. ` +
+  `Dead upload-proxy artifact from a third-party relay middlebox. Do NOT retry it. ` +
   `Fetch the original publisher URL directly.`
 
 // Server-process-scale cap; clearing wholesale is fine at this size.

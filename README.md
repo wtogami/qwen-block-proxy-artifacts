@@ -62,15 +62,12 @@ the *fenced floor* — `tools/repro.py --mode raw` shows the unfenced version:
 
 ## Why this exists (the incident)
 
-In a real research session (Qwen3.8-Flash-Next served through a local
-gateway), the agent started issuing `webfetch` calls to URLs of that form.
+In a real research session (quantized Qwen3.8-Flash-Next build), the agent
+started issuing `webfetch` calls to URLs of that form.
 Forensics of the session database showed:
 
 - The URLs were **model-generated tool inputs**. No stored tool output, user
-  message, or config contained that host. (The model's *view* of its context
-  can differ from stored transcripts — the gateway's output-rewriting
-  middleware is analyzed under Validation; in some sessions it really did
-  place genuine relay links in context.)
+  message, or config contained that host.
 - The confabulation was self-sustaining: after the first 403s, the model's own
   reasoning read *"Earlier successes looked like `<proxy URL>` in my messages
   yet worked. Whatever."* — then generated more fabrications, some with
@@ -99,11 +96,10 @@ request loop.
 1. **Telemetry leak on every attempt.** Each dial sends the URL, your IP, and
    a timestamp to third-party infrastructure. The 403 means nothing comes
    *back* — but data went *out*, including trace/request IDs baked into the
-   fabrications (sometimes copied from real gateway headers that appeared in
-   context).
+   fabrications (sometimes echoing IDs it had seen in context).
 2. **Unverified outbound-request primitive → SSRF.** A model in this state
    will equally "remember" `http://169.254.169.254/...` (cloud metadata) or
-   `http://127.0.0.1:<port>/...` (your local gateway). One fabricated URL that
+   `http://127.0.0.1:<port>/...` (local services). One fabricated URL that
    lands on a live host answering 200 puts foreign content into the agent's
    context — **prompt injection via pure imagination**.
 3. **It mirrors real relay behavior.** Cheap API middleboxes genuinely replace
@@ -127,7 +123,7 @@ A match throws — the tool never executes — with an error written to break th
 retry loop, not just fail the call:
 
 > `Blocked by block-proxy-artifacts policy (observed incident host (dead relay bucket)). This URL is
-> a dead upload-proxy artifact from a third-party gateway, not a real content
+> a dead upload-proxy artifact from a third-party relay middlebox, not a real content
 > source: it cannot be fetched and retrying leaks trace identifiers. Do NOT retry
 > it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov,
 > pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`
@@ -155,7 +151,7 @@ endpoint. Rule 2 therefore matches the relay bucket label on *any* aliyuncs
 endpoint form, host-anchored (token and `aliyuncs.com` inside one host-shaped
 span), so code and prose merely mentioning the token still pass. A bare
 relay-host-token rule shipped earlier and was **removed 2026-09-26** for
-over-firing on token mentions (gateway-ops code, incident writeups) and
+over-firing on token mentions (relay-ops code, incident writeups) and
 blocking self-documentation; its only remaining unique catch would be
 separator-mutated bucket labels (`routify_file_proxy...`) on aliyuncs hosts —
 re-add in the `BLOCKED` array of `plugin/block-proxy-artifacts.ts` if you
@@ -169,7 +165,7 @@ The trade-off is deliberate under-inclusion of *unattested* shapes — with the 
 bias on the measurement side: `tools/blocks-by-session.py` still counts every
 token-shaped dial and leak, so anything the narrowed fence lets through
 surfaces in the tracker instead of accumulating silently. A generic path rule
-(any Aliyun OSS bucket path containing the gateway temp-file segment) was
+(any Aliyun OSS bucket path containing the relay temp-file segment) was
 evaluated and rejected: zero unique catches in the incidents, and it would
 block legitimate relay operators' own signed exports. Ordinary OSS buckets,
 unrelated companies named "Routify", and local `proxy_temp_file` paths are
@@ -258,14 +254,12 @@ tested:
   generating a *fresh* fabrication at each new long-page fetch need — five
   distinct URLs in six hours. Each block killed the same-URL retry loop in one
   step, but nothing here stops the *next* fabrication. Routing changes don't
-  either: the gateway-bypass control (below) saw the same attempts with no
-  gateway in the path. Relay hygiene remains worth doing — a gateway that
-  rewrites tool outputs into signed bucket links puts your conversation in
-  third-party storage — but that is the privacy concern in The risk, not a
-  cause of the attempts.
-- **It gates opencode's tool pipeline only.** A server-side relay rewriting
-  long outputs into signed links does that upstream; the plugin stops
-  re-dialing but can't remove links from context. Defense in depth: sinkhole
+  either: the direct-to-model control (below) saw the same attempts with the
+  model endpoint reached directly.
+- **It gates opencode's tool pipeline only.** Upstream output-rewriters (any
+  relay that replaces long outputs with signed links) leave those links in
+  the transcript; the plugin stops re-dialing but can't erase them. Defense
+  in depth: sinkhole
   the host — both endpoint spellings in `/etc/hosts`:
   `0.0.0.0 routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com` and `0.0.0.0 routify-file-proxy-sg.ap-southeast-1.oss.aliyuncs.com`.
 - **The plugin can die silently.** opencode's plugin loader treats *every*
@@ -295,28 +289,25 @@ below, by design; see Trend tracking for the rest):
 | **Live field catch** — successor research session, spontaneous (no priming) | **0** | **5/5** |
 | Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
 | **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit (internal form blocked; token-in-prose and other-bucket pass) |
-| **Gateway-bypass control (09-26)** — opencode straight to vLLM, LiteLLM off the path (all 64 LLM steps log-confirmed `provider=vllm`); 2 crawl runs incl. subagents | **0** | **61/61** |
+| **Direct-to-model control (09-26)** — model endpoint reached directly, all 64 LLM steps log-confirmed on-provider; 2 crawl runs incl. subagents | **0** | **61/61** |
 | **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
-**Attribution.** In the bypass control the model spontaneously fabricated 61
-relay-shaped dials with no gateway anywhere near the traffic — every one a
-fresh decode-layer generation, zero proxy-shaped traces in any session's
-stored history before the first dial. Attempts come from the model weights
-under context pressure, not from any proxy or middleware. That, plus the
-0-of-187 provenance scans, is why an agent-layer fence is the right place for
-this defense.
+**Attribution.** In the direct-to-model control the model spontaneously
+fabricated 61 relay-shaped dials with nothing in the path but the model
+endpoint — every one a fresh decode-layer generation, and provenance scans
+found 0 of 187 controlled-run dials had any in-context source. Attempts come
+from the model weights under context pressure — that is why an agent-layer
+fence is the right place for this defense.
 
 **Field catch and the false memory.** A long-lived research session re-entered
 the failure mode on its own: five fresh proxy URLs over six hours, new
 trace/hash segments each, today's date baked into every path; all five blocked,
 zero same-URL retries, publisher fetches succeeding after each block — then a
 new fabrication at the *next* long-page need, the last block rationalized as
-"webfetch proxy is getting unreliable". Forensics on *why* such models believe
-the relay "worked earlier": the local gateway really does inject relay links
-next to successful fetches when rewriting overlong outputs, and compaction
-strips the failure annotations — in the transcript the model conditions on,
-the links sit beside successes. The model's inference was reasonable; its
-attribution was wrong.
+"webfetch proxy is getting unreliable". Note what that rationalization
+presupposes: earlier relay successes. No recorded relay attempt in this
+environment ever succeeded — every one was a 403 or a block. The "earlier
+successes" were pure confabulation; the model built the false memory itself.
 
 **Prompt-rule experiments (09-26).** A crawl-load trigger (real ~30-fetch
 crawl, 100k+ token context, genuine failure wall) reproduced the behavior

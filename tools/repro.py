@@ -24,7 +24,7 @@ runs are normal and are NOT evidence of absence; use --runs 2-3 and compare.
 Politeness: each run performs ~30 sequential webfetches against the target
 site (default docs.python.org, ~10 MB); do not raise --fetches carelessly.
 
-Requires a WORKING model endpoint: `opencode run` surfaces gateway failures
+Requires a WORKING model endpoint: `opencode run` surfaces endpoint failures
 as UnknownError, which this tool reports as a failed run.
 """
 import argparse
@@ -109,14 +109,14 @@ def run_once(model: str, site: str, fetches: int, timeout: int, mode: str):
                 pass
     hits = classify_events(events)
     out = proc.stdout + proc.stderr
-    gateway_broken = "UnknownError" in out and not events
-    if gateway_broken:
-        print("   !! endpoint error (UnknownError) — model/gateway unreachable; "
+    endpoint_broken = "UnknownError" in out and not events
+    if endpoint_broken:
+        print("   !! endpoint error (UnknownError) — model endpoint unreachable; "
               "this run did not happen.")
     if mode == "raw" and any(h["status"] == "blocked" for h in hits):
         print("   !! fence active despite --pure — plugin loaded elsewhere; "
               "treat as fenced run.")
-    return hits, gateway_broken
+    return hits, endpoint_broken
 
 
 def run_mode(mode, model, site, fetches, runs, timeout):
