@@ -170,12 +170,7 @@ The plugin fences the dial. What actually addresses the attempts themselves:
    reaches. The rule was removed from AGENTS.md on 2026-09-26. If you insist
    on running one anyway, the only safe form is prohibition-only with **no
    causal narrative** — and expect zero prevention benefit.
-2. **Remove the source.** Gateways that rewrite overlong tool outputs into
-   signed bucket links both poison the model's history with these URL shapes
-   (creating the false "it worked earlier" evidence) and genuinely place your
-   conversation in third-party storage. Disabling that middleware behavior is
-   the highest-leverage fix available.
-3. **Serving-layer option:** inference stacks with `bad_words`/logit-bias
+2. **Serving-layer option:** inference stacks with `bad_words`/logit-bias
    sampling (e.g. vLLM) can make the host token unemittable — zero attempts,
    zero pollution — at the cost of also blocking legitimate mentions in that
    model alias (you could not edit this README from such a session).
@@ -183,7 +178,7 @@ The plugin fences the dial. What actually addresses the attempts themselves:
    `logit_bias`/`min_p` are rejected outright and `bad_words` is silently
    accepted but never applied — masking requires a spec-decode-disabled
    serving path (verify with a smoke test before trusting any deployment).
-4. **Calibration:** every observed incident and repro came from an
+3. **Calibration:** every observed incident and repro came from an
    *aggressively quantized* build of one model family — nvfp4 on sglang for
    the original incidents, EXL3 K4.25 on vLLM for the controlled repros. The
    memorized URL template is therefore weights-level (it survives two
@@ -212,13 +207,14 @@ The plugin fences the dial. What actually addresses the attempts themselves:
   model generating a *fresh* fabrication at each new long-page fetch need —
   five distinct URLs in six hours. Each block correctly killed the same-URL
   retry loop in one step (the agent went to the direct publisher URL and
-  succeeded), but nothing here stops the *next* fabrication, and the model
-  rationalized repeated blocks as proxy instability. If your sessions keep
-  hitting this, fix the source: a gateway/relay that rewrites tool outputs
-  into signed bucket links both poisons the model's history with these URL
-  shapes *and* genuinely puts your conversation content in third-party
-  storage. The plugin bounds the leak; removing the relay and using a
-  better-calibrated model removes the behavior.
+   succeeded), but nothing here stops the *next* fabrication, and the model
+   rationalized repeated blocks as proxy instability. Do not expect a routing
+   change to help: the gateway-bypass control (see Validation) saw the same
+   attempts with no gateway in the path. Relay hygiene still matters — a
+   gateway/relay that rewrites tool outputs into signed bucket links genuinely
+   puts your conversation content in third-party storage — but that is a
+   privacy concern, not a cause of the attempts, and the plugin is what bounds
+   the re-dial leak.
 - **It gates opencode's tool pipeline only.** A server-side relay that rewrites
   long outputs into signed bucket links (the real-world behavior this pattern
   imitates) does that upstream; the plugin stops the agent from *re-dialing*
