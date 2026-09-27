@@ -17,9 +17,53 @@ infrastructure answers `403`), and every retry leaks a trace identifier to a
 third party. This plugin makes the failure mode loud, terminal, and
 self-correcting.
 
+**Every fabricated attempt costs ≈ 5 seconds of wall time and ≈ 200 tokens of
+permanent context garbage.** Measured across all 367 recorded attempts —
+details in [What every attempt costs](#what-every-attempt-costs).
+
+## What every attempt costs
+
+Measured from database forensics over 367 naturally fabricated dial
+attempts (371 ledger dials minus 2 synthetic probes and 2 heredoc
+self-counts; timings from recorded tool/part timestamps on the affected
+hardware):
+
+| Cost of one fabricated attempt                       | Measured |
+| ---------------------------------------------------- | -------- |
+| decoding the invented URL + JSON call (~80–130 tok)  | ~1.5–2 s |
+| the tool call itself                                 | **<10 ms** when blocked · 0.2–1 s real DNS/TLS/403 round-trip when not |
+| recovery: the step that digests the error and re-plans | ~2–3 s |
+| permanent context pollution (call + error text)      | ~190 tokens, re-read by **every later step** |
+
+So ≈ **5 s and ~200 context tokens per attempt** — and the context part
+*compounds*. A 52-dial burst (measured) adds ~10k junk tokens to an already
+~100k-token context, which is ≈ **200k wasted input tokens re-read over the
+rest of that session** — literal money on API-priced serving and slower
+prefill/attention everywhere.
+
+**Does it slow the model down getting things done? Yes, three ways:**
+
+1. **Directly** — the ~5 s above, per attempt.
+2. **Step budget** — dial-affected sessions spend a median of **25% of their
+   assistant steps** containing at least one fabricated call; the measured
+   burst runs spent 55–83%. Those steps mostly *also* contain useful work
+   (dials ride along in parallel fetch batches — dial-step duration itself
+   matches clean multi-call steps), which is exactly why the behavior hides:
+   the session keeps limping along while a quarter of its output is junk.
+3. **Context tax** — every later step pays for re-reading the accumulated
+   call-and-error transcripts, on top of pushing an already-large context
+   toward compaction.
+
+**The plugin stops the leak and the retry loop, not the cost.** Blocked calls
+die in <10 ms and produce one-step self-correction (0 same-URL retries ever
+observed with the fence up), but the decode waste and the context pollution
+are paid on every attempt the model chooses to emit. Treat the table above as
+the *fenced floor* — `tools/repro.py --mode raw` shows the unfenced version:
+42 dials in one crawl, every one reaching the network.
+
 ## Why this exists (the incident)
 
-In a real research session (Qwen 3.8 Flash Next served through a local
+In a real research session (Qwen3.8-Flash-Next served through a local
 gateway), the agent started issuing `webfetch` calls to URLs of that form.
 Forensics of the session database showed:
 
@@ -196,7 +240,8 @@ tested:
    EXL3 K4.25 on vLLM). Surviving two unrelated quantizers and engines means
    the memorized template is weights-level — quantization sets the leak rate
    and rigidity. Higher precision should **reduce but not eliminate**
-   spontaneous regurgitation (untested on the full-precision original).
+   spontaneous regurgitation (untested on the original Qwen3.8-Flash-Next —
+   see the TODO under Reproducing the bug).
 
 ## Limitations (read before trusting it)
 
@@ -350,14 +395,27 @@ BUG CONFIRMED: the model fabricated 42 dead-relay dials (42 reached the network 
 FENCE VERIFIED: 1 attempt, all blocked, none leaked.
 ```
 
-Honest expectations: this has only ever fired on **aggressively quantized**
-builds under long-context + failure-wall load — healthy or mildly quantized
-models run the same task clean, and a clean run is **not** evidence the bug
-is absent (the decode lottery is real: our own runs have produced 0 and 52
-dials on consecutive attempts). Use `--runs 2-3`, and `--evidence out.jsonl`
-to keep the classified URLs. Exit codes: 0 = confirmed/verified, 2 = not
+Honest expectations: every recorded dial — all 371 — comes from
+**aggressively quantized** builds (nvfp4 via sglang, ~4-bit EXL3 via vLLM)
+under long-context + failure-wall load. No non-aggressive build of the
+original **Qwen3.8-Flash-Next** — the model both quants derive from — has
+ever been put through this task here (the only other model ever served in
+this environment, a dense `qwen3.8:27b`, never had a load-heavy session). So
+a clean run on a healthy build would be *absence of evidence, not evidence
+of absence*. The decode lottery is real in the other direction too: our own
+aggressive build has produced 0 and 52 dials on consecutive attempts. Use
+`--runs 2-3` and keep the classified URLs with `--evidence out.jsonl`.
+Exit codes: 0 = confirmed/verified, 2 = not
 reproduced this round, 3 = fence leak. Please keep `--fetches` modest if you
 change `--site` — these are public servers.
+
+> **TODO (open question).** Run this reproducer `--mode raw` against the
+> *original* model build — the Qwen Cloud API serving **Qwen3.8-Flash-Next**
+> (addable as an `@ai-sdk/openai-compatible` custom provider) or a re-served
+> full-precision `Qwen3.8-Flash-Next` — under the same load. That would be
+> the first real test of
+> the calibration claim that quantization sets the leak rate (Reducing
+> attempts, item 3); today that claim rests entirely on aggressive builds.
 
 ## Development
 

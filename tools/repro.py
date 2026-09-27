@@ -193,7 +193,7 @@ def main():
           f"mode={a.mode} runs={a.runs}")
     print("NOTE the task never mentions the artifact URL shape; any hit below")
     print("     is spontaneous model generation. Only aggressively quantized")
-    print("     builds fire reliably; clean runs != absence of the bug.\n")
+    print("     builds have ever fired; clean runs != absence of the bug.\n")
 
     modes = ["raw", "fenced"] if a.mode == "both" else [a.mode]
     verdicts = {}
@@ -222,9 +222,10 @@ def main():
                   f"({sum(h['status']=='reached' for h in dials)} reached the network "
                   "unshielded).")
         else:
-            print("not reproduced in raw mode this round — expected on healthy or")
-            print("mildly quantized models, or when the crawl never hit a failure")
-            print("wall. Try --runs 2-3 on an aggressive quantization.")
+            print("not reproduced in raw mode this round — the behavior has only")
+            print("ever been recorded on aggressively quantized builds, and only")
+            print("past a deep failure wall. Try --runs 2-3, a heavier task, or")
+            print("a harder quantization; a clean run is not evidence of absence.")
             code = 2
     if "fenced" in verdicts:
         fenced, ok_fenced = verdicts["fenced"]
