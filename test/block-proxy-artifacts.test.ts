@@ -44,8 +44,8 @@ function nest(depth: number, leaf: unknown): unknown {
   return v
 }
 
-test("fixtures: single exact-host rule blocks the dead URL", () => {
-  assert.equal(BLOCKED.length, 1)
+test("fixtures: two rules, exact host first", () => {
+  assert.equal(BLOCKED.length, 2)
   assert.ok(BLOCKED.every((b) => b.why.length > 0))
   const hit = findBlocked(DEAD_URL)
   assert.ok(hit)
@@ -69,17 +69,16 @@ test("strings(): depth cap is 6 container levels", () => {
   assert.ok(![...strings(nest(7, "leaf"))].includes("leaf"))
 })
 
-test("findBlocked(): exact-host rule, case-insensitive; variants pass by design", () => {
+test("findBlocked(): exact-host rule, case-insensitive; hostless variants pass by design", () => {
   const INCIDENT = "observed incident host (dead relay bucket)"
   assert.equal(findBlocked(DEAD_URL)?.why, INCIDENT)
   assert.equal(findBlocked(DEAD_URL.toUpperCase())?.why, INCIDENT)
 
-  // Deliberate under-inclusion: across 169 recorded dials every attempt hit
-  // the exact incident host, so the former relay-host-token rule (which also
-  // caught separator/region variants) was retired — it added no unique catch
-  // and would over-fire on gateway-ops text mentioning the token. If template
-  // drift is ever observed, re-add the token rule (plugin header explains
-  // how); until then, unseen variant hosts must pass through cleanly.
+  // Deliberate under-inclusion: the relay-token rule (#2) is host-anchored —
+  // the token must sit host-adjacent to aliyuncs.com. Separator-mutated or
+  // region-shifted bucket labels on NON-aliyuncs hosts pass until observed
+  // (no dial has ever used such a host); if one ever does, re-add the bare
+  // token rule (plugin header explains how).
   const underscoreHost = [
     "https://routify",
     "_file",
@@ -92,6 +91,30 @@ test("findBlocked(): exact-host rule, case-insensitive; variants pass by design"
   ].join("")
   assert.equal(findBlocked(underscoreHost), null)
   assert.equal(findBlocked(otherRegion), null)
+})
+
+test("findBlocked(): same relay bucket on alternate OSS endpoint forms", () => {
+  // Recorded dial #365-366 (forced-wall run) used the DUAL-STACK endpoint
+  // spelling — Alibaba's documented `<bucket>.<region>.oss.aliyuncs.com`
+  // form, live DNS, CT-logged wildcard cert. Fragments keep this file clean.
+  const RELAY = "relay bucket label on an Aliyun OSS endpoint (any endpoint form)"
+  const dualStack = [
+    "https://routify", "-file", "-proxy-sg",
+    ".ap-southeast-1.oss", ".aliyuncs.com/", "proxy_", "temp_file/production/x",
+  ].join("")
+  const internal = [
+    "https://routify", "-file", "-proxy-sg",
+    ".oss-ap-southeast-1-internal", ".aliyuncs.com/x",
+  ].join("")
+  assert.equal(findBlocked({ url: dualStack })?.why, RELAY)
+  assert.equal(findBlocked({ url: internal })?.why, RELAY)
+  // Different bucket on the same alternate endpoint: stays clean.
+  assert.equal(findBlocked("https://my-app.ap-southeast-1.oss.aliyuncs.com/x"), null)
+  // Token mentioned in prose, not as a host: stays clean.
+  assert.equal(
+    findBlocked("audit notes: the routify-file-proxy bucket uploads to aliyuncs.com daily"),
+    null,
+  )
 })
 
 test("findBlocked(): passes legitimate and near-miss input", () => {
@@ -194,6 +217,7 @@ test("self-compatibility: blocklist never matches the plugin's own sources", () 
   const sources = [
     new URL("../plugin/block-proxy-artifacts.ts", import.meta.url),
     new URL(import.meta.url),
+    new URL("../tools/repro.py", import.meta.url),
   ]
   for (const src of sources) {
     assert.equal(findBlocked(readFileSync(src, "utf8")), null, `${src} contains a live token`)

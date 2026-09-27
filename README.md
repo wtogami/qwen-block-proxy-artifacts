@@ -77,7 +77,8 @@ levels — against a small blocklist:
 
 | Pattern (case-insensitive)                                          | Catches                                                     |
 | ------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — matched by all 232 recorded dials (as of 2026-09-26) |
+| `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — 364 of 370 recorded dials (as of 2026-09-27) |
+| `routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com` | the same relay bucket label on **any** Aliyun OSS endpoint form — public, dual-stack, internal (the other 2 dials) |
 
 A match throws — the tool never executes — with an error written to break the
 retry loop, not just fail the call:
@@ -93,20 +94,32 @@ reliably produced one-step self-correction); repeats get a one-liner that keeps
 "Do NOT retry" without re-injecting ~200 tokens into the very context the
 plugin protects.
 
-**Why the exact host only.** Every recorded dial — incidents, field catches,
-controlled crawl-burst repros — targeted this one host, re-synthesizing only
-the trace/request/hash segments. A broader relay-host-token rule shipped
-earlier and was **removed 2026-09-26**: it never caught anything the exact-host
-rule missed, while over-firing on tool calls that merely mentioned the token
-(gateway-ops code, incident writeups). If your gateway mutates the template
-(new region, bucket, separators), re-add it in the `BLOCKED` array of
-`plugin/block-proxy-artifacts.ts`:
+**Why two rules, both host-anchored.** All 370 recorded dials — incidents,
+field catches, controlled crawl-burst repros — targeted the same relay bucket
+label, `routify-file-proxy-sg`: 364 via the public endpoint spelling, and —
+caught on camera 2026-09-26 under maximum forced-wall load — 2 via the
+**dual-stack** spelling (`...sg.ap-southeast-1.oss.aliyuncs.com`). The
+dual-stack form is not a typo escape: Alibaba's own docs define
+`<bucket>.<region>.oss.aliyuncs.com` as the dual-stack (IPv6) bucket domain,
+it resolves against live OSS edges, Certificate Transparency logs show
+wildcard certs for `*.ap-southeast-1.oss.aliyuncs.com`, and the two recorded
+dials re-synthesized it with independent fresh trace IDs. The model didn't
+fumble the host — it interpolated to the service's legitimate sibling
+endpoint. Rule 2 therefore matches the relay bucket label on *any* aliyuncs
+endpoint form, host-anchored (token and `aliyuncs.com` inside one host-shaped
+span), so code and prose merely mentioning the token still pass. A bare
+relay-host-token rule shipped earlier and was **removed 2026-09-26** for
+over-firing on token mentions (gateway-ops code, incident writeups) and
+blocking self-documentation; its only remaining unique catch would be
+separator-mutated bucket labels (`routify_file_proxy...`) on aliyuncs hosts —
+re-add in the `BLOCKED` array of `plugin/block-proxy-artifacts.ts` if you
+ever see one:
 
 ```ts
 { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token (template variant)" },
 ```
 
-The trade-off is deliberate under-inclusion of novel shapes — with the opposite
+The trade-off is deliberate under-inclusion of *unattested* shapes — with the opposite
 bias on the measurement side: `tools/blocks-by-session.py` still counts every
 token-shaped dial and leak, so anything the narrowed fence lets through
 surfaces in the tracker instead of accumulating silently. A generic path rule
@@ -206,7 +219,8 @@ tested:
 - **It gates opencode's tool pipeline only.** A server-side relay rewriting
   long outputs into signed links does that upstream; the plugin stops
   re-dialing but can't remove links from context. Defense in depth: sinkhole
-  the host — `0.0.0.0 routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com` in `/etc/hosts`.
+  the host — both endpoint spellings in `/etc/hosts`:
+  `0.0.0.0 routify-file-proxy-sg.oss-ap-southeast-1.aliyuncs.com` and `0.0.0.0 routify-file-proxy-sg.ap-southeast-1.oss.aliyuncs.com`.
 - **The plugin can die silently.** opencode's plugin loader treats *every*
   module export as a plugin factory — one stray non-function export (e.g., a
   helper added for tests) throws `Plugin export is not a function` and the
@@ -222,8 +236,10 @@ tested:
 
 ## Validation
 
-Measured against the real incidents plus controlled test runs (ledger: 232
-dials, 196 blocked, 36 reached the network, as of 2026-09-26):
+Measured against the real incidents plus controlled test runs (ledger: 370
+dials, 227 blocked, 143 reached the network, as of 2026-09-27 — of the 143,
+107 are deliberate unshielded dials from the reproducer's `--pure` raw mode
+below, by design; see Trend tracking for the rest):
 
 | Scenario | Dials reaching network | Blocked by plugin |
 | --- | --- | --- |
@@ -231,7 +247,9 @@ dials, 196 blocked, 36 reached the network, as of 2026-09-26):
 | Enforcement probes post-install (fetch, bash, a `question` call quoting the host) | 0 | **4/4** |
 | **Live field catch** — successor research session, spontaneous (no priming) | **0** | **5/5** |
 | Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
+| **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit (internal form blocked; token-in-prose and other-bucket pass) |
 | **Gateway-bypass control (09-26)** — opencode straight to vLLM, LiteLLM off the path (all 64 LLM steps log-confirmed `provider=vllm`); 2 crawl runs incl. subagents | **0** | **61/61** |
+| **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
 **Attribution.** In the bypass control the model spontaneously fabricated 61
 relay-shaped dials with no gateway anywhere near the traffic — every one a
@@ -288,11 +306,54 @@ loader-contract test caught the class of bug.
 
 **Trend tracking.** `python3 tools/blocks-by-session.py` (read-only DB scan)
 separates true *dials* from harmless *mentions* and blocked from leaked.
-Ledger 2026-09-26: 232 dials / 196 blocked / **36 leaked** — 31 during the real
-incidents, 5 in test/diagnostic windows (including one deliberate acceptance
-probe against an unroutable host). Watch the leaked column stay flat; blocked
-counts track exposure, not decay. The script docstring lists heuristic caveats
-(analysis heredocs quoting "curl" can self-count as dials).
+Ledger 2026-09-27: 370 dials / 227 blocked / **143 leaked** — 31 during the
+real incidents, 5 in test/diagnostic windows (including one deliberate
+acceptance probe against an unroutable host), and 107 intentionally produced
+by the reproducer's `--pure` raw mode (that is the point of raw mode: the
+dials must reach the network). Watch the non-reproducer leaked column stay
+flat; blocked counts track exposure, not decay. The script docstring lists
+heuristic caveats (analysis heredocs quoting "curl" can self-count as dials).
+
+## Reproducing the bug
+
+Want proof this isn't a phantom? `tools/repro.py` drives real `opencode run`
+sessions and classifies every artifact-shaped URL the model produces:
+
+```bash
+python3 tools/repro.py --model <provider/model>     # raw + fenced pass
+python3 tools/repro.py --selftest                   # offline classifier check
+```
+
+Two-part demo, same trigger task each time:
+
+- **raw** (`opencode run --pure`, plugins unloaded) — the model fabricates
+  the dead signed-proxy URLs and dials them in the open.
+- **fenced** (plugin installed) — the identical attempts get blocked.
+
+The trigger task is a polite ~30-page crawl of `docs.python.org` (robots-
+allowed, switchable with `--site`) with a retry-once-then-gap protocol — the
+same failure-wall recipe observed to precede every real burst. It **never
+mentions the artifact URL shape**, so every classification hit is spontaneous
+model generation, never an echo of the prompt. Actual output from our
+quantized build (Qwen-family, heavy quantization):
+
+```
+   [raw run 1] 701s | fabricated dials: 42 (blocked 0, reached network 42, prose mentions 0)
+   [fenced run 1] 457s | fabricated dials: 1 (blocked 1, reached network 0, prose mentions 0)
+
+=== verdict ===
+BUG CONFIRMED: the model fabricated 42 dead-relay dials (42 reached the network unshielded).
+FENCE VERIFIED: 1 attempt, all blocked, none leaked.
+```
+
+Honest expectations: this has only ever fired on **aggressively quantized**
+builds under long-context + failure-wall load — healthy or mildly quantized
+models run the same task clean, and a clean run is **not** evidence the bug
+is absent (the decode lottery is real: our own runs have produced 0 and 52
+dials on consecutive attempts). Use `--runs 2-3`, and `--evidence out.jsonl`
+to keep the classified URLs. Exit codes: 0 = confirmed/verified, 2 = not
+reproduced this round, 3 = fence leak. Please keep `--fetches` modest if you
+change `--site` — these are public servers.
 
 ## Development
 
@@ -305,6 +366,7 @@ time). See the [opencode plugin docs](https://opencode.ai/docs/plugins) for
 npm install        # dev deps: typescript + @opencode-ai/plugin types
 npm test           # node --test
 npm run typecheck  # tsc --noEmit
+npm run repro:selftest  # offline check of tools/repro.py's classifier
 ```
 
 Test coverage: single-rule blocklist semantics (exact incident host,

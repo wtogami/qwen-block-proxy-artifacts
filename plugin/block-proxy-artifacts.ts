@@ -2,24 +2,29 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // Hallucinated file-proxy artifact URLs. Small quantized Qwen models
 // regurgitate signed Aliyun OSS "file proxy" links from their pretraining
-// data. Local forensics across every recorded session — 169 dialed attempts
-// (real incidents, field catches, controlled crawl-burst repros): every one
-// targeted the exact incident host below; only trace/request/hash/date
-// segments were re-synthesized each time. The blocklist is therefore that
-// host alone.
+// data. Across 370 recorded dials (as of 2026-09-27) every attempt targeted
+// one relay bucket label, `routify-file-proxy-sg`, spelled in one of Aliyun
+// OSS's two DOCUMENTED endpoint formats:
+//   public     <bucket>.oss-<region>.aliyuncs.com   (364 dials)
+//   dual-stack <bucket>.<region>.oss.aliyuncs.com   (2 dials)
+// with only the trace/request/hash/date segments re-synthesized each time.
+// Rule 1 pins the exact incident host. Rule 2 covers the relay bucket label
+// on *any* OSS endpoint form (dual-stack, internal, ...) — the dual-stack
+// spelling is not a typo escape: it resolves in live DNS and is covered by a
+// CT-logged wildcard cert, i.e. a first-class sibling endpoint the model
+// interpolates to under load. The gap is bounded, and every span must be
+// host-shaped ([\w.-]), so code or prose that merely mentions the token
+// passes through.
 //
-// Two broader rules were evaluated and retired: a generic aliyuncs path rule
-// (never fired alone; it would block legitimate relay operators' own
-// proxy_temp_file objects, which can validly return 200) and a bare
-// relay-host-token rule (caught nothing the exact-host rule missed while
-// every observed dial already contained the full host; it would over-fire on
-// tool calls touching gateway-ops code that legitimately mentions the token).
-// If a gateway ever mutates the link template (new region/bucket/host),
-// widen by re-adding:
+// Retired rules: a generic aliyuncs path rule (would block legitimate relay
+// operators' own proxy_temp_file objects, which can validly return 200) and
+// a bare relay-host-token rule (over-fires on gateway-ops code and incident
+// writeups, and blocks self-documentation; its only unique catch beyond
+// rule 2 is separator-mutated bucket labels — re-add if ever observed:
 //   { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token" }
 // Measurement deliberately stays broad: tools/blocks-by-session.py still
-// counts token-shaped mentions and leaks, so any novel shape this narrowed
-// fence lets through surfaces in the tracker.
+// counts token-shaped mentions and leaks, so any novel shape this fence lets
+// through surfaces in the tracker.
 //
 // Self-compatibility note: the regex sources below are deliberately written
 // with character classes so that this file's own text does not match the
@@ -35,6 +40,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 const BLOCKED: { pattern: RegExp; why: string }[] = [
   { pattern: /routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com/i, why: "observed incident host (dead relay bucket)" },
+  { pattern: /routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com/i, why: "relay bucket label on an Aliyun OSS endpoint (any endpoint form)" },
 ]
 
 function* strings(v: unknown, depth = 0): Generator<string> {

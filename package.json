@@ -20,12 +20,14 @@
   "files": [
     "plugin/block-proxy-artifacts.ts",
     "tools/blocks-by-session.py",
+    "tools/repro.py",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "repro:selftest": "python3 tools/repro.py --selftest"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.0.0",
