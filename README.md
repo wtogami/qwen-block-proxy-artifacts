@@ -18,8 +18,7 @@ third party. This plugin makes the failure mode loud, terminal, and
 self-correcting.
 
 **Every fabricated attempt costs ≈ 5 seconds of wall time and ≈ 200 tokens of
-permanent context garbage.** Measured across all 367 recorded attempts —
-details in [What every attempt costs](#what-every-attempt-costs).
+permanent context garbage.** Measured across all 367 recorded attempts.
 
 ## What every attempt costs
 
@@ -43,7 +42,7 @@ prefill/attention everywhere.
 
 **Does it slow the model down getting things done? Yes, three ways:**
 
-1. **Directly** — the ~5 s above, per attempt.
+1. **Directly** — the ~5 s above, per attempt (RTX 6000 Blackwell).
 2. **Step budget** — dial-affected sessions spend a median of **25% of their
    assistant steps** containing at least one fabricated call; the measured
    burst runs spent 55–83%. Those steps mostly *also* contain useful work
