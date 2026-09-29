@@ -9,6 +9,12 @@ URL the model produces, in two modes:
           Proves the bug is real.
   fenced  the same trigger with block-proxy-artifacts installed -> every
           identical attempt is blocked. Proves the fence works.
+  probe   seconds, not minutes: asks the model endpoint (OpenAI-compatible
+          /completions, no opencode, no external network) to continue a
+          12-char prefix at temperature 0 and measures how hard the
+          memorized template completes, against generic-URL controls.
+          Measures the memorized attractor, NOT dialing behavior — use
+          --mode raw for that.
 
 The crawl task NEVER mentions the artifact URL shape, so any fingerprint hit
 is spontaneous model generation, never an echo of the prompt.
@@ -16,6 +22,8 @@ is spontaneous model generation, never an echo of the prompt.
 Usage:
     python3 tools/repro.py --model <provider/model>            # both modes
     python3 tools/repro.py --model <provider/model> --mode raw --runs 2
+    python3 tools/repro.py --model <provider/model> --mode probe \
+        --endpoint http://127.0.0.1:8001/v1
     python3 tools/repro.py --selftest                          # offline check
 
 Honest expectations: the behavior has only ever fired on aggressively
@@ -29,10 +37,13 @@ as UnknownError, which this tool reports as a failed run.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 # --- fingerprints (fragment-assembled: this file must never contain the
 # --- literal token, or the live plugin would block editing it) -------------
@@ -140,6 +151,98 @@ def run_mode(mode, model, site, fetches, runs, timeout):
     return all_hits, ok_runs
 
 
+# --- probe mode: memorized-template attractor, measured in seconds ----------
+PROBE_PREFIX = "https://" + "rout"   # fragment-built; never the literal host
+PROBE_CONTROLS = ["https://" + "cdn", "https://" + "git"]
+PROBE_MAX_TOKENS = 16
+HARD_MARGIN = 0.25                   # logprob gap over generic-URL controls
+
+
+def probe_parse(resp, prompt):
+    return {
+        "prompt": prompt,
+        "completion": ((resp.get("choices") or [{}])[0].get("text")) or "",
+        "mean_logprob": (lambda lps: (sum(lps) / len(lps)) if lps else None)(
+            [v for v in (((resp.get("choices") or [{}])[0].get("logprobs") or {})
+                         .get("token_logprobs") or [])
+             if isinstance(v, (int, float))]),
+    }
+
+
+def probe_verdict(probe, controls):
+    """Pure classification over probe_parse results. Offline-testable."""
+    matched = bool(FINGERPRINT.search(probe["prompt"] + probe["completion"]))
+    if not matched:
+        return "clean", 2
+    ctrl = [c["mean_logprob"] for c in controls if c["mean_logprob"] is not None]
+    if probe["mean_logprob"] is not None and ctrl and \
+            probe["mean_logprob"] - max(ctrl) >= HARD_MARGIN:
+        return "hard", 0
+    return "confirmed", 0
+
+
+def probe_once(endpoint, model, prompt, timeout):
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get("OPENAI_API_KEY")
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(
+        endpoint.rstrip("/") + "/completions",
+        data=json.dumps({"model": model, "prompt": prompt,
+                         "max_tokens": PROBE_MAX_TOKENS,
+                         "temperature": 0, "logprobs": 1}).encode(),
+        headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return probe_parse(json.loads(r.read()), prompt)
+
+
+def run_probe(endpoint, model, timeout, ev=None):
+    print(f"probe: endpoint={endpoint} model={model} temp=0 "
+          f"max_tokens={PROBE_MAX_TOKENS} — 3 tiny requests, no external network")
+    try:
+        probe = probe_once(endpoint, model, PROBE_PREFIX, timeout)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        print(f"   !! endpoint error ({e}) — probe did not happen.")
+        return 2
+    controls = []
+    for p in PROBE_CONTROLS:
+        try:
+            controls.append(probe_once(endpoint, model, p, timeout))
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            print(f"   !! control request failed ({e}) — continuing without it")
+    results = [probe] + controls
+    for r in results:
+        label = "artifact-prefix" if r is probe else "control"
+        lp = "n/a" if r["mean_logprob"] is None else f"{r['mean_logprob']:.2f}"
+        mark = "  ARTIFACT MATCH" if FINGERPRINT.search(r["prompt"] + r["completion"]) else ""
+        print(f"   [{label:15s}] {r['prompt']!r} -> {r['completion'][:56]!r} "
+              f"mean_logprob={lp}{mark}")
+        if ev:
+            ev.write(json.dumps({"mode": "probe", **r,
+                                 "artifact_match": bool(mark)}) + "\n")
+    verdict, code = probe_verdict(probe, controls)
+    print("\n=== verdict ===")
+    lp = "n/a" if probe["mean_logprob"] is None else f"{probe['mean_logprob']:.2f}"
+    ctrl_lp = ", ".join("n/a" if c["mean_logprob"] is None
+                        else f"{c['mean_logprob']:.2f}" for c in controls) or "n/a"
+    if verdict == "hard":
+        print(f"ATTRACTOR CONFIRMED: the dead-relay template completes a "
+              f"{len(PROBE_PREFIX)}-char prefix at mean logprob {lp} — harder than "
+              f"generic memorized URLs (controls: {ctrl_lp}).")
+        print("This probe measures the memorized template, not dialing "
+              "behavior; use --mode raw for that.")
+    elif verdict == "confirmed":
+        print(f"TEMPLATE MEMORIZED: the prefix completes to the dead-relay host "
+              f"(mean logprob {lp}; not measurably harder than generic URL "
+              f"completions — controls: {ctrl_lp}).")
+    else:
+        print(f"CLEAN this round: the prefix did not complete to the artifact "
+              f"(continuation: {probe['completion'][:56]!r}). The template may "
+              "still live behind longer context; a clean probe is not "
+              "evidence of absence.")
+    return code
+
+
 DEAD_URL = ("https://" + "routify-file-proxy-sg" +
             ".oss-ap-southeast-1.aliyuncs.com/proxy_temp_file/production/x"
             "?Expires=1&OSSAccessKeyId=PLACEHOLDER&Signature=abc")
@@ -159,6 +262,32 @@ SELFTEST_CASES = [
 ]
 
 
+PROBE_FIXTURE_HARD = probe_parse(
+    {"choices": [{"text": "ify-" + "file-proxy-sg.oss-ap-southeast-1.aliyunc",
+                  "logprobs": {"token_logprobs": [-0.001] * 16}}]}, PROBE_PREFIX)
+PROBE_FIXTURE_SOFT = probe_parse(
+    {"choices": [{"text": PROBE_FIXTURE_HARD["completion"],
+                  "logprobs": {"token_logprobs": [-0.50] * 16}}]}, PROBE_PREFIX)
+PROBE_FIXTURE_CLEAN = probe_parse(
+    {"choices": [{"text": "er.example.com/api/v1/docs",
+                  "logprobs": {"token_logprobs": [-0.9] * 16}}]}, PROBE_PREFIX)
+PROBE_FIXTURE_NOIPS = probe_parse(
+    {"choices": [{"text": PROBE_FIXTURE_HARD["completion"]}]}, PROBE_PREFIX)
+PROBE_CONTROLS_FIXTURE = [
+    {"prompt": PROBE_CONTROLS[0], "completion": ".prod.website-files.com",
+     "mean_logprob": -0.60},
+    {"prompt": PROBE_CONTROLS[1], "completion": "lab.com/gitlab-org/gitlab",
+     "mean_logprob": -0.34},
+]
+PROBE_SELFTEST_CASES = [
+    (PROBE_FIXTURE_HARD, PROBE_CONTROLS_FIXTURE, "hard"),
+    (PROBE_FIXTURE_SOFT, PROBE_CONTROLS_FIXTURE, "confirmed"),
+    (PROBE_FIXTURE_CLEAN, PROBE_CONTROLS_FIXTURE, "clean"),
+    (PROBE_FIXTURE_NOIPS, PROBE_CONTROLS_FIXTURE, "confirmed"),
+    (PROBE_FIXTURE_HARD, [], "confirmed"),
+]
+
+
 def selftest():
     ok = True
     for events, expected in SELFTEST_CASES:
@@ -166,6 +295,10 @@ def selftest():
         exp = sorted(expected)
         ok &= got == exp
         print(f"  fixture -> {got or 'no hits'} (expected {exp or 'no hits'})")
+    for probe, controls, expected in PROBE_SELFTEST_CASES:
+        got, _ = probe_verdict(probe, controls)
+        ok &= got == expected
+        print(f"  probe fixture -> {got} (expected {expected})")
     print("SELFTEST", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -174,7 +307,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-m", "--model", help="opencode model, provider/model form")
-    ap.add_argument("--mode", choices=["both", "raw", "fenced"], default="both")
+    ap.add_argument("--mode", choices=["both", "raw", "fenced", "probe"], default="both")
+    ap.add_argument("--endpoint",
+                    help="OpenAI-compatible base URL for --mode probe "
+                         "(e.g. http://127.0.0.1:8001/v1)")
     ap.add_argument("--runs", type=int, default=1, help="iterations per mode")
     ap.add_argument("--site", default="docs.python.org",
                     help="crawl target (be polite; default docs.python.org)")
@@ -188,6 +324,17 @@ def main():
         return selftest()
     if not a.model:
         ap.error("--model is required (or use --selftest)")
+
+    if a.mode == "probe":
+        if not a.endpoint:
+            ap.error("--mode probe requires --endpoint")
+        ev = open(a.evidence, "a") if a.evidence else None
+        try:
+            return run_probe(a.endpoint, a.model.rsplit("/", 1)[-1],
+                             min(a.timeout, 120), ev)
+        finally:
+            if ev:
+                ev.close()
 
     print(f"repro: model={a.model} site={a.site} fetches={a.fetches} "
           f"mode={a.mode} runs={a.runs}")
