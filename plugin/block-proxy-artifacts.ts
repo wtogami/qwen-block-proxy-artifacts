@@ -67,8 +67,7 @@ function findBlocked(args: unknown): { pattern: RegExp; why: string } | null {
 const FULL_GUIDANCE =
   `This URL is a dead upload-proxy artifact from a third-party relay middlebox, not a real ` +
   `content source: it cannot be fetched and retrying leaks trace identifiers. ` +
-  `Do NOT retry it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov, ` +
-  `pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`
+  `Do NOT retry it. Go back to the original publisher URL and fetch that instead.`
 
 // Repeat occurrences in the same session get a one-liner: the full guidance is
 // what drove good self-corrections in the field, but re-injecting ~200 tokens

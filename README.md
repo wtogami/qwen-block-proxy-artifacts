@@ -195,13 +195,17 @@ retry loop, not just fail the call:
 > `Blocked by block-proxy-artifacts policy (observed incident host (dead relay bucket)). This URL is
 > a dead upload-proxy artifact from a third-party relay middlebox, not a real content
 > source: it cannot be fetched and retrying leaks trace identifiers. Do NOT retry
-> it. Go back to the original publisher URL (doi.org, pubmed.ncbi.nlm.nih.gov,
-> pmc.ncbi.nlm.nih.gov, europepmc, or the publisher site) and fetch that instead.`
+> it. Go back to the original publisher URL and fetch that instead.`
 
 The **first** block per session carries that full guidance (in the field it
 reliably produced one-step self-correction); repeats get a one-liner that keeps
-"Do NOT retry" without re-injecting ~200 tokens into the very context the
-plugin protects.
+"Do NOT retry" without re-injecting ~100 tokens into the very context the
+plugin protects. The message once also listed example publisher sites
+(doi.org, PubMed, PMC, Europe PMC) — an artifact of the biomedical incident
+corpus; no evidence it improved recovery beyond naming "the original
+publisher URL", and every token of guidance is re-read by every later step,
+so the list was dropped 2026-09-29 (~22 tok saved once per session; the
+per-burst one-liners are the bigger context lever, ~40 tok each).
 
 **Why two rules, both host-anchored.** Of the 371 recorded dials, 368 hit
 the same relay bucket label, `routify-file-proxy-sg` — 365 via the public
