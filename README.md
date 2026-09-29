@@ -30,7 +30,7 @@ under vLLM with MTP(3) speculative decoding):
 
 | Cost of one fabricated attempt                       | Measured |
 | ---------------------------------------------------- | -------- |
-| decoding the invented URL + JSON call (~80–130 tok)  | ~1.5–2 s |
+| decoding the invented URL + JSON call                        | ~1.5–2 s |
 | the tool call itself                                 | **<10 ms** when blocked · 0.2–1 s real DNS/TLS/403 round-trip when not |
 | recovery: the step that digests the error and re-plans | ~2–3 s |
 | permanent context pollution (call + error text)      | ~190 tokens (chars÷4 heuristic, a floor — a measured external report says ~2×), re-read by **every later step** |
@@ -45,8 +45,8 @@ prefill/attention everywhere.
 
 1. **Directly** — the ~5 s above, per attempt (RTX 6000 Blackwell).
 2. **Step budget** — dial-affected sessions spend a median of **25% of their
-   assistant steps** containing at least one fabricated call; the measured
-   burst runs spent 55–83%. Those steps mostly *also* contain useful work
+   assistant steps** containing at least one fabricated call. Those steps
+   mostly *also* contain useful work
    (dials ride along in parallel fetch batches — dial-step duration itself
    matches clean multi-call steps), which is exactly why the behavior hides:
    the session keeps limping along while a quarter of its output is junk.
@@ -91,16 +91,13 @@ Per-attempt cost, our measurements vs. their report:
 
 | | RTX 6000 Blackwell · EXL3 (measured here) | DGX Spark GB10 · NVFP4 (owner-reported) |
 | --- | --- | --- |
-| emitting the URL + call | ~1.5–2 s | ~9.2 s mean (9.54 s amortized with HTTP) |
+| emitting the URL + call | ~1.5–2 s | ~9.2 s mean |
 | unshielded 403 round-trip | 0.2–1 s | 0.68–0.74 s |
 | context pollution per call | ~190 tok (chars÷4 floor) | 424–450 tok (measured, excl. framing) |
 | same-URL retries | never (fence up) | once per URL (unshielded) |
 
-Caveats: their sample is n=4 vs our n=367; their timing ran under concurrent
-load and they explicitly disclaim the window figure (152 s over four attempts
-includes intervening processing/queueing, not a 38 s/attempt penalty); they
-report no recovery-step time, so compare emission+tool scales, not totals.
-The scales are still consistent: emission is ~6× slower on GB10, ≈ the
+Caveats: n=4 vs our n=367, and their timing ran under concurrent load —
+compare emission+tool scales, not totals. The scales are consistent: emission is ~6× slower on GB10, ≈ the
 memory-bandwidth ratio between the machines — **the wall-clock cost of this
 bug scales with decode bandwidth**, so slower edge hardware pays
 proportionally more per confabulation. Their report confirms the NVFP4
@@ -300,88 +297,47 @@ on directly (see **Weights-level surgery** below):
 
 ## Weights-level surgery: we found the memory, ablated it — and it made things worse (2026-09-28/29)
 
-Qwen3.8-Flash-Next carries a physical memory for surface strings: a
-**Predictive Look-ahead Embedding (PLE)** — a hashed 3-gram lookup table
-(16 sub-tables × 20 M rows × 160-dim BF16, ≈100 GB) injected at transformer
-layer 2 — and every quantizer ships that table **byte-identically**
-(quantizers only requantize the routed experts). The template is a
-near-deterministic completion: at temperature 0 from empty context,
-`https://rout` completes the incident host with mean logprob **−0.00**,
-where ordinary memorized URLs land at −0.4…−0.7 (`tools/repro.py --mode
-probe` — three tiny endpoint requests, seconds, no dialing).
+Qwen3.8-Flash-Next carries a physical memory for surface strings: a hashed
+3-gram **Predictive Look-ahead Embedding (PLE)** table injected at
+transformer layer 2 — and every quantizer ships that table
+**byte-identically** (quantizers only requantize the routed experts). The
+template lives there as a near-deterministic completion: at temperature 0
+from empty context, `https://rout` completes the incident host with mean
+logprob **−0.00**, where ordinary memorized URLs land at −0.4…−0.7
+(`tools/repro.py --mode probe` — three tiny endpoint requests, no dialing).
 
-So we tried a vaccine. Full plan in [SURGERY.md](SURGERY.md); what happened,
-on a byte-verified fork (originals provably untouched; digest-pinned engine;
-the n-gram row-key hash reimplemented and cross-validated against the live
-CUDA kernel):
+So we tried a vaccine: zero the table's template-igniting n-gram rows on a
+byte-verified fork (originals provably untouched). The mechanism worked
+exactly as designed — the probe attractor died (−0.00 → a generic URL) and
+every unrelated prompt stayed byte-identical — but the *behavior* didn't
+care: each ablated route came back as a *mutant* shape, a new member of the
+relay family (`routify-file-proxy` on `oss-accelerate` and `oss-cn-beijing`,
+`routify-file-oversea` — no `proxy` segment — on `oss-acdr-ut-1`, a `.io`
+TLD variant; none present in the 371 pre-surgery dials, and rule 2 absorbed
+them the same day). The unshielded runs also **re-dialed the same URL after
+the 403** — the retry loop the fence kills, independently seen by the
+external DGX Spark report.
 
-| State | probe `https://rout` | raw unshielded agent runs | collateral (48-prompt greedy battery) |
-| --- | --- | --- | --- |
-| fork, tables intact | incident host, −0.00 | 0 and 0 (no failure wall that round) | baseline |
-| **all 128 table tensors zeroed** | generic URL, −0.88 | — | all memorized URL completions softened, as designed |
-| **240 rows zeroed** (template's relay-internal 3-grams; shared trigrams like `:`+`//`+`rout` deliberately untouched) | a real "Routify blog" site, −0.31 | **19 dials — never-before-seen shapes** | every non-relay prompt byte-identical |
-| **+144 more rows zeroed** (those new shapes) | garbage, −0.78 | **51 dials — further new shapes** | 46/48 identical; the 2 relay prompts invent a `.io` variant |
+A pre-registered two-arm novelty test (fence on, `--keep-fence`, 8 runs per
+arm, identical trigger) then asked the decisive question: is the dial space
+enumerable by *any* rule set, or generative?
 
-The new shapes were full family members: `routify-file-proxy` on
-`oss-accelerate` and `oss-cn-beijing` endpoints, `routify-file-oversea`
-(no `proxy` segment anywhere) on `oss-acdr-ut-1`, and a
-`routify-file-proxy-eu`… on **`.aliyuncs.io`** — none of them present in the
-371 pre-surgery dials. And the unshielded runs **re-dialed the same URL
-after the 403** (19/26/25 unique URLs became 37/51/50 tool calls),
-independently confirming the retry loop the fence kills — the same behavior
-the external DGX Spark report had observed.
-
-**Verdict so far: the table is the igniter.** Zeroing rows deterministically
-kills specific hard attractors, and the structural collateral guarantee held
-*perfectly* — byte-identical outputs on every non-relay battery prompt, at
-every surgical state. The behavior didn't care: kill the route and the model
-dials a mutant of it.
-
-**The final experiment: a pre-registered two-arm novelty test**, run later
-the same day. If the relay family is
-enumerable, a vaccine — or a fence rule-set — could cover it; if it is
-generative, neither can. Protocol: fence enabled on both arms
-(`tools/repro.py --keep-fence` — blocked dials still count, no dial egress),
-identical trigger, 8 raw runs per arm, shapes =
-(bucket label, endpoint form, TLD, path head) with slot values normalized.
-
-| Metric | ORIG (production weights) | R3 (384 rows ablated) |
+| | Production weights | Ablated fork |
 | --- | --- | --- |
-| runs igniting | 6 / 8 | 6 / 8 |
-| blocked dials | 253 | 184 |
-| unique dial shapes | **2 — flat from run 3** (reproduces the 365+2 ledger exactly) | **9, novelty still positive in runs 7–8; 13 observed members, still growing** |
-| canonical shape | dominant | **zero occurrences** |
-| data to third parties | 0 | 0 — escaped mutants dialed nonexistent hosts; run audit: crawl fetches were the only external traffic that connected |
+| dial shapes | 2, flat over 8 runs (reproduces the 365+2 ledger exactly) | 13+ members and still growing; the canonical shape never returns |
+| data to third parties | 0 | 0 — escaped mutants dialed nonexistent hosts |
+| vs the two-rule fence | **253/253 blocked — complete coverage** | **leaks**: mutants on non-`aliyuncs` hosts (e.g. `routify-file-*…-sg-new.com`) match no host-anchored rule, and chasing them provably never converges |
 
-Both pre-registered readings hit, in opposite directions:
-
-- **The production weights are genuinely concentrated.** The table's two
-  basins are the entire spontaneous space — 253/253 dials blocked, no leak
-  across eight runs. An earlier hypothesis in this section — that the
-  one-shape ledger was fence-feedback rather than nature — was *wrong*, and
-  the correction stays in the record: the concentration is real basin
-  dominance.
-- **Ablation doesn't shrink the target, it moves it.** With the two igniter
-  basins zeroed, the dial rate is unchanged (~32 → ~23 dials/run) but
-  generation floods the underlying grammar: host doublings
-  (`…-sg-ap-southeast-1.oss-ap-southeast-1`), a `routify-file-s10` shape
-  bleeding Salesforce tokens, `routify-file-proxy-proxy`, path-only
-  variants — with **zero carryover between runs** and the canonical shape
-  never appearing again. The model *reaches for* the template and misfires
-  into hybrids: the ablated route never completes, the behavior survives in
-  mutant form.
-
-**This is how ablation made things worse, not merely useless.** Against the
-production model, two host-anchored rules cover the whole dial space:
-253/253 blocked, zero egress — the fence is a complete shield precisely
-*because* the model is concentrated. Against the ablated model the same
-fence **leaks**: some R3 mutants (e.g. `routify-file-s10` on a
-`…-sg-new.com` host — not even on `aliyuncs`) match no host-anchored rule,
-and the novelty curve proves any rule list chasing them cannot converge.
-Zero benefit, strictly worse protection. The vaccine is abandoned on two
-independent grounds (G5 breadth; novelty redirection). The `…-sg-new` class
-stays deliberately *unfenced* — chasing family members was just proven
-unconvergeable, and the ORIG arm shows production never emits them.
+Both pre-registered readings hit, in opposite directions — and the
+correction stays in the record: our earlier guess that the ledger's
+one-shape concentration was fence-feedback was *wrong*; it is genuine basin
+dominance. Which is how the ablation made things **worse**, not merely
+useless: the production model's dial space is fully covered by two rules;
+the ablated model's is covered by none that could ever ship. Zero benefit,
+strictly worse protection — the vaccine was abandoned, the fork restored
+pristine, and the fence remains the control (the `…-sg-new` class stays
+deliberately *unfenced*: production never emits it). Full plan:
+[SURGERY.md](SURGERY.md).
 
 ## Limitations (read before trusting it)
 
@@ -433,11 +389,10 @@ the rest):
 | Incidents, pre-plugin (3 sessions, real agent behavior) | **31, all 403** (URL + IP + timestamp leaked each time) | — |
 | Enforcement probes post-install (fetch, bash, a `question` call quoting the host) | 0 | **4/4** |
 | **Live field catch** — successor research session, spontaneous (no priming) | **0** | **5/5** |
-| Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
-| **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit at the time (internal form blocked; token-in-prose and other-bucket pass) |
+| **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | live **1/1** (dual-stack shape); unit suite covers the internal form, token-in-prose and other-bucket |
 | **Direct-to-model control (09-26)** — model endpoint reached directly, all 64 LLM steps log-confirmed on-provider; 2 crawl runs incl. subagents | **0** | **61/61** |
 | **Fence generalization (09-29)** — the surgery's ablated fork free-generated 3 fence-escaping shapes (oversea label, internal form, `.io`); rule 2 broadened same day | 0 (unit-tested shapes, not a live window) | **16/16** unit: all three escaped shapes blocked; prose and other-bucket pass |
-| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; probe + raw runs + battery, then the two-arm novelty test (`--keep-fence`); verdict: ablation makes protection worse, vaccine abandoned — see Weights-level surgery | 70 leaked by design (raw = shield off); in the novelty arms, escaping mutants dialed only nonexistent hosts | **437 blocked** (253 ORIG + 184 R3; ORIG 253/253 — two rules cover 100% of the production dial space) |
+| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; probe + raw runs, then the two-arm novelty test (`--keep-fence`); verdict: ablation makes protection worse, vaccine abandoned — see Weights-level surgery | 70 leaked by design (raw = shield off); escaping novelty mutants dialed only nonexistent hosts | **437 blocked** in the novelty arms — production arm **253/253**: two rules cover 100% of the production dial space |
 | **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
 **Attribution.** In the direct-to-model control the model spontaneously
@@ -499,15 +454,12 @@ self-counts), and 107 intentionally produced by the reproducer's `--pure`
 raw mode (that is the point of raw mode: the dials must reach the network).
 Ledger 2026-09-29 (final): **878 dials / 665 blocked / 213 leaked**. The
 +507 since 09-27 is entirely deliberate weight-surgery experiment traffic:
-70 unshielded dials from raw runs on the ablated fork (19, 26, 25 unique
-URLs across three runs; `--pure` loads no fence, so no new blocks), plus 437
-fence-blocked dials from the two-arm novelty test (`--keep-fence`) — the
-ORIG arm blocked 253/253 and the **leaked column never moved**. Two counting notes for anyone
-diffing against the live tracker: it counts tool *calls*, and the surgery
-runs re-dialed URLs after the 403 (19/26/25 URLs → 37/51/50 calls), and
-analysis-session heredocs quoting curl-or-regex text self-count as
-false-positive drift (documented in the script docstring) — quote the dated
-snapshots, not the running total. Watch the non-reproducer leaked column stay
+70 unshielded dials from raw runs on the ablated fork (`--pure` loads no
+fence), plus 437 fence-blocked dials from the two-arm novelty test — the
+production arm blocked 253/253 and the **leaked column never moved**. Quote
+dated snapshots, not the running tracker total: it counts tool *calls*
+(post-403 re-dials included) and analysis sessions self-count as
+false-positive drift (documented in the script docstring). Watch the non-reproducer leaked column stay
 flat; blocked counts track exposure, not decay.
 
 ## Reproducing the bug
