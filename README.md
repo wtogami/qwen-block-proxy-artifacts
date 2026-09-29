@@ -298,7 +298,7 @@ on directly (see **Weights-level surgery** below):
     not eliminate** spontaneous regurgitation (untested on the original
     Qwen3.8-Flash-Next — see the TODO under Reproducing the bug).
 
-## Weights-level surgery: we found the memory, ablated it — and it did not help (2026-09-28/29)
+## Weights-level surgery: we found the memory, ablated it — and it made things worse (2026-09-28/29)
 
 Qwen3.8-Flash-Next carries a physical memory for surface strings: a
 **Predictive Look-ahead Embedding (PLE)** — a hashed 3-gram lookup table
@@ -331,24 +331,67 @@ after the 403** (19/26/25 unique URLs became 37/51/50 tool calls),
 independently confirming the retry loop the fence kills — the same behavior
 the external DGX Spark report had observed.
 
-**Verdict: the table is the igniter; the weights are the library.**
-Zeroing rows deterministically kills specific hard attractors — the
-structural collateral guarantee held *perfectly* (byte-identical outputs on
-every non-relay battery prompt, at every surgical state). The behavior
-didn't care: the URL *family* and the decision to reach for a "cached proxy
-copy" after a failure wall live in distributed LM weights, so enumerating
-rows to ablate cannot converge — each ablation redirects generation to the
-nearest unablated sibling (2× ablated rows → 2.6× dials: 19 → 51). A vaccine
-would have to enumerate a generative family; the fence, which blocks at the
-tool boundary where the generation lands, remains the only working control.
-Two genuine byproducts of a failed vaccine: it proved the ledger's
-one-shape concentration (365 of 371) was igniter dominance plus
-fence-feedback, not family rarity — unshielded decode shows a broad family;
-and it surfaced the three fence-escaping shapes that rule 2 now covers
-(above). During the experiment the fence faithfully over-fired exactly as
-documented: it blocked the surgery session's attempt to *write its own
-forensics file* (host-shaped strings in write payloads); the forensics were
-completed with non-breaking-hyphen breaks.
+**Verdict so far: the table is the igniter.** Zeroing rows deterministically
+kills specific hard attractors, and the structural collateral guarantee held
+*perfectly* — byte-identical outputs on every non-relay battery prompt, at
+every surgical state. The behavior didn't care: kill the route and the model
+dials a mutant of it.
+
+**The final experiment: a pre-registered two-arm NOVELTY TEST** (later the
+same day; full report in `NOVELTY-TEST.md`). If the relay family is
+enumerable, a vaccine — or a fence rule-set — could cover it; if it is
+generative, neither can. Protocol: fence enabled on both arms
+(`tools/repro.py --keep-fence` — blocked dials still count, no dial egress),
+identical trigger, 8 raw runs per arm, shapes =
+(bucket label, endpoint form, TLD, path head) with slot values normalized.
+
+| Metric | ORIG (production weights) | R3 (384 rows ablated) |
+| --- | --- | --- |
+| runs igniting | 6 / 8 | 6 / 8 |
+| blocked dials | 253 | 184 |
+| unique dial shapes | **2 — flat from run 3** (reproduces the 365+2 ledger exactly) | **9, novelty still positive in runs 7–8; 13 observed members, still growing** |
+| canonical shape | dominant | **zero occurrences** |
+| dial egress | 0 | 0 (run audit: crawl fetches were the only external traffic) |
+
+Both pre-registered readings hit, in opposite directions:
+
+- **The production weights are genuinely concentrated.** The table's two
+  basins are the entire spontaneous space — 253/253 dials blocked, no leak
+  across eight runs. An earlier hypothesis in this section — that the
+  one-shape ledger was fence-feedback rather than nature — was *wrong*, and
+  the correction stays in the record: the concentration is real basin
+  dominance.
+- **Ablation doesn't shrink the target, it moves it.** With the two igniter
+  basins zeroed, the dial rate is unchanged (~32 → ~23 dials/run) but
+  generation floods the underlying grammar: host doublings
+  (`…-sg-ap-southeast-1.oss-ap-southeast-1`), a `routify-file-s10` shape
+  bleeding Salesforce tokens, `routify-file-proxy-proxy`, path-only
+  variants — with **zero carryover between runs** and the canonical shape
+  never appearing again. The model *reaches for* the template and misfires
+  into hybrids: the ablated route never completes, the behavior survives in
+  mutant form.
+
+**This is how ablation made things worse, not merely useless.** Against the
+production model, two host-anchored rules cover the whole dial space:
+253/253 blocked, zero egress — the fence is a complete shield precisely
+*because* the model is concentrated. Against the ablated model the same
+fence **leaks**: several R3 mutants (e.g. `routify-file-s10` on a
+`…-sg-new.com` host — not even on `aliyuncs`) match no host-anchored rule,
+and the novelty curve proves any rule list chasing them cannot converge.
+Zero benefit, strictly worse protection. The vaccine is abandoned on two
+independent grounds (G5 breadth; novelty redirection). The `…-sg-new` class
+stays deliberately *unfenced* — chasing family members was just proven
+unconvergeable, and the ORIG arm shows production never emits them.
+
+Byproducts that remain: the three fence-escaping shapes rule 2 now covers
+(above) — host-anchored, because enumerating family members does not
+converge — and a fence that faithfully over-fired exactly as documented: it
+blocked the surgery session's attempt to *write its own forensics file*
+(host-shaped strings in write payloads); the forensics were completed with
+non-breaking-hyphen breaks. The fork was restored byte-pristine (384/384
+zero spans reverted) and the production engine runs on original weights;
+full forensics under `/home/opencode/ple-surgery-fork/` (`G2-NOTES.md`,
+`G3-G4-NOTES.md`, `NOVELTY-TEST.md`, `G5-VERDICT.md`).
 
 ## Limitations (read before trusting it)
 
@@ -389,8 +432,8 @@ completed with non-breaking-hyphen breaks.
 
 ## Validation
 
-Measured against the real incidents plus controlled test runs (ledger: 441
-dials, 228 blocked, 213 reached the network, as of 2026-09-29 — of the 213,
+Measured against the real incidents plus controlled test runs (ledger: 878
+dials, 665 blocked, 213 reached the network, final 2026-09-29 count — of the 213,
 177 are deliberate unshielded dials from the reproducer's `--pure` raw mode
 below and the weight-surgery experiments, by design; see Trend tracking for
 the rest):
@@ -403,7 +446,8 @@ the rest):
 | Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
 | **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit (internal form blocked; token-in-prose and other-bucket pass) |
 | **Direct-to-model control (09-26)** — model endpoint reached directly, all 64 LLM steps log-confirmed on-provider; 2 crawl runs incl. subagents | **0** | **61/61** |
-| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; the ablated fork free-generated 3 fence-escaping shapes, so rule 2 was generalized the same day (see Weights-level surgery) | +70 new dials — all *deliberate* raw-mode leaks from the surgery runs, unshielded by design | **16/16** unit: oversea label, internal form and `.io` variant all blocked; prose and other-bucket pass |
+| **Fence generalization (09-29)** — the surgery's ablated fork free-generated 3 fence-escaping shapes (oversea label, internal form, `.io`); rule 2 broadened same day | surfaced by test, not a live window | 0 | **16/16** unit: all three escaped shapes blocked; prose and other-bucket pass |
+| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; probe + raw runs + battery, then the two-arm novelty test (`--keep-fence`) | 70 raw-mode leaks + 437 novelty-test dials | **70 leaked by design** (raw = shield off); **novelty ORIG: 253/253 blocked — two rules cover 100% of the production dial space**; R3: zero egress, escaping mutants hit nonexistent hosts | ablation makes protection worse; vaccine abandoned — see Weights-level surgery |
 | **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
 **Attribution.** In the direct-to-model control the model spontaneously
@@ -463,10 +507,12 @@ real incidents, 5 in test/diagnostic windows (including the deliberate
 acceptance probe against an unroutable host, and 2 known analysis-heredoc
 self-counts), and 107 intentionally produced by the reproducer's `--pure`
 raw mode (that is the point of raw mode: the dials must reach the network).
-Ledger 2026-09-29: **441 dials / 228 blocked / 213 leaked** — the +70 are
-the deliberate unshielded dials of the weight-surgery raw runs (19, 26, 25
-unique URLs across three runs on the ablated fork, fence off by design; no
-new blocks, since `--pure` loads none). Two counting notes for anyone
+Ledger 2026-09-29 (final): **878 dials / 665 blocked / 213 leaked**. The
++507 since 09-27 is entirely deliberate weight-surgery experiment traffic:
+70 unshielded dials from raw runs on the ablated fork (19, 26, 25 unique
+URLs across three runs; `--pure` loads no fence, so no new blocks), plus 437
+fence-blocked dials from the two-arm novelty test (`--keep-fence`) — the
+ORIG arm blocked 253/253 and the **leaked column never moved**. Two counting notes for anyone
 diffing against the live tracker: it counts tool *calls*, and the surgery
 runs re-dialed URLs after the 403 (19/26/25 URLs → 37/51/50 calls), and
 analysis-session heredocs quoting curl-or-regex text self-count as

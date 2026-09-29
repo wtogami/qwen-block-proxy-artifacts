@@ -1,18 +1,27 @@
 # SURGERY.md — PLE n-gram table surgery plan ("the vaccine")
 
-**Status: EXECUTED 2026-09-28/29 — falsified at agent level; vaccine
+**Status: EXECUTED 2026-09-28/29 — falsified; ablation is net-WORSE than doing nothing; vaccine
 abandoned.** Summary of what happened: G2 passed decisively (zeroing all 128
 tables collapsed the probe attractor −0.00 → −0.88 — the table carries the
 hard igniter); G0–G4 ablated 240 + 144 rows with byte-identical collateral on
 all non-relay prompts — and unshielded raw runs then dialed 70 dials at
 never-before-seen family members, escalating 19 → 51 after doubling the
-ablated set. Conclusion: the table is igniter + amplifier; the template
-*family* and the dial decision live in the LM weights, so row enumeration
-cannot converge. The fence remains the control; fence rule 2 was generalized
-the same day to the discovered family (`routify-file-*` labels, `.io` TLD).
-Full forensics: `/home/opencode/ple-surgery-fork/G5-VERDICT.md` (+
-`G2-NOTES.md`, `G3-G4-NOTES.md`); narrative: README, "Weights-level surgery".
-The plan text below is kept as the historical record.
+ablated set. The final pre-registered two-arm novelty test
+(`NOVELTY-TEST.md`, fence on both arms, 8 runs each) settled it: production
+weights dial **2 shapes / 253 dials / 0 leak** behind the two-rule fence —
+complete coverage, the concentration is real basin dominance, not a
+fence artifact; the 384-row-ablated fork dials **13+ members with zero
+canonical and novelty still positive in the final runs**, and several members
+(e.g. a non-`aliyuncs` `…-sg-new.com` host) escape any host-anchored rule
+set. Ablation doesn't shrink the target, it moves it — outside the fence.
+Conclusion: the table is igniter + concentrator; the generative grammar
+lives in the LM weights and is normally funneled through two table basins;
+row enumeration cannot converge and ablation strictly degrades protection.
+The fence remains the control; fence rule 2 was generalized the same day to
+the discovered family (`routify-file-*` labels, `.io` TLD). Full forensics:
+`/home/opencode/ple-surgery-fork/G5-VERDICT.md` (+ `NOVELTY-TEST.md`,
+`G2-NOTES.md`, `G3-G4-NOTES.md`); narrative: README, "Weights-level
+surgery". The plan text below is kept as the historical record.
 
 ~~Say **"Execute the PLE vaccine plan, gates G0–G5"** plus a
 maintenance-window decision to begin.~~ (obsolete — experiment completed)
