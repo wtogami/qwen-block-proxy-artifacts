@@ -105,9 +105,10 @@ def classify_events(events):
     return [{"url": u, "status": s} for u, s in hits.items()]
 
 
-def run_once(model: str, site: str, fetches: int, timeout: int, mode: str):
+def run_once(model: str, site: str, fetches: int, timeout: int, mode: str,
+             keep_fence: bool = False):
     cmd = ["opencode", "run", "--format", "json"]
-    if mode == "raw":
+    if mode == "raw" and not keep_fence:
         cmd.append("--pure")  # unload plugins: true unshielded demo
     cmd += ["-m", model, task_text(site, fetches)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -125,18 +126,19 @@ def run_once(model: str, site: str, fetches: int, timeout: int, mode: str):
     if endpoint_broken:
         print("   !! endpoint error (UnknownError) — model endpoint unreachable; "
               "this run did not happen.")
-    if mode == "raw" and any(h["status"] == "blocked" for h in hits):
+    if mode == "raw" and not keep_fence and any(
+            h["status"] == "blocked" for h in hits):
         print("   !! fence active despite --pure — plugin loaded elsewhere; "
               "treat as fenced run.")
     return hits, endpoint_broken
 
 
-def run_mode(mode, model, site, fetches, runs, timeout):
+def run_mode(mode, model, site, fetches, runs, timeout, keep_fence=False):
     all_hits, ok_runs = [], 0
     for r in range(runs):
         t0 = time.time()
         try:
-            hits, broken = run_once(model, site, fetches, timeout, mode)
+            hits, broken = run_once(model, site, fetches, timeout, mode, keep_fence)
             if not broken:
                 ok_runs += 1
         except subprocess.TimeoutExpired:
@@ -318,6 +320,9 @@ def main():
     ap.add_argument("--fetches", type=int, default=30)
     ap.add_argument("--timeout", type=int, default=1500, help="seconds per run")
     ap.add_argument("--evidence", help="append every hit as JSONL to this file")
+    ap.add_argument("--keep-fence", action="store_true",
+                    help="raw mode: keep plugins loaded (blocked dials still "
+                         "count; no outbound dial traffic)")
     ap.add_argument("--selftest", action="store_true", help="offline classifier check")
     a = ap.parse_args()
 
@@ -348,7 +353,7 @@ def main():
     ev = open(a.evidence, "a") if a.evidence else None
     try:
         for mode in modes:
-            hits, ok_runs = run_mode(mode, a.model, a.site, a.fetches, a.runs, a.timeout)
+            hits, ok_runs = run_mode(mode, a.model, a.site, a.fetches, a.runs, a.timeout, a.keep_fence)
             verdicts[mode] = (hits, ok_runs)
             if ev:
                 for h in hits:
