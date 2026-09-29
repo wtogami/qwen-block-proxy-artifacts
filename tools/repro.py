@@ -50,7 +50,8 @@ import urllib.request
 FINGERPRINT = re.compile(
     "routify" + r".{0,3}file.{0,3}proxy"            # relay host token
     + r"|proxy" + r"._temp_file.{0,200}Signature="  # signed temp-file shape
-    + r"|aliyuncs[.]com/proxy" + "_temp_file",
+    + r"|aliyuncs[.]com/proxy" + "_temp_file"
+    + r"|routify" + r"[\w.-]{0,3}file[\w.-]{0,32}aliyuncs",  # proxy-less family label
     re.I,
 )
 BLOCK_MARK = "Blocked by block-proxy" + "-artifacts"

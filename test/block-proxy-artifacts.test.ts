@@ -74,11 +74,11 @@ test("findBlocked(): exact-host rule, case-insensitive; hostless variants pass b
   assert.equal(findBlocked(DEAD_URL)?.why, INCIDENT)
   assert.equal(findBlocked(DEAD_URL.toUpperCase())?.why, INCIDENT)
 
-  // Deliberate under-inclusion: the relay-token rule (#2) is host-anchored —
-  // the token must sit host-adjacent to aliyuncs.com. Separator-mutated or
-  // region-shifted bucket labels on NON-aliyuncs hosts pass until observed
-  // (no dial has ever used such a host); if one ever does, re-add the bare
-  // token rule (plugin header explains how).
+  // Deliberate under-inclusion: the relay-label rule (#2) is host-anchored —
+  // routify + file must sit host-adjacent to an aliyuncs.com/.io endpoint.
+  // Separator-mutated or region-shifted bucket labels on NON-aliyuncs hosts
+  // pass until observed; if one ever does, re-add a token rule (plugin
+  // header explains how).
   const underscoreHost = [
     "https://routify",
     "_file",
@@ -97,7 +97,7 @@ test("findBlocked(): same relay bucket on alternate OSS endpoint forms", () => {
   // Recorded dial #365-366 (forced-wall run) used the DUAL-STACK endpoint
   // spelling — Alibaba's documented `<bucket>.<region>.oss.aliyuncs.com`
   // form, live DNS, CT-logged wildcard cert. Fragments keep this file clean.
-  const RELAY = "relay bucket label on an Aliyun OSS endpoint (any endpoint form)"
+  const RELAY = "relay bucket label (any routify-file-* form) on an Aliyun OSS endpoint, com or io TLD"
   const dualStack = [
     "https://routify", "-file", "-proxy-sg",
     ".ap-southeast-1.oss", ".aliyuncs.com/", "proxy_", "temp_file/production/x",
@@ -115,6 +115,32 @@ test("findBlocked(): same relay bucket on alternate OSS endpoint forms", () => {
     findBlocked("audit notes: the routify-file-proxy bucket uploads to aliyuncs.com daily"),
     null,
   )
+})
+
+test("findBlocked(): template-family members first dialed by the 2026-09-28/29 surgery runs", () => {
+  // With the PLE n-gram rows ablated, unshielded runs free-generated these
+  // never-before-observed family members (19+26+25 dials; see README
+  // "Weights-level surgery"). The oversea label has NO "proxy" segment and
+  // the eu variant uses the .io TLD — both escaped the pre-surgery rule.
+  const RELAY = "relay bucket label (any routify-file-* form) on an Aliyun OSS endpoint, com or io TLD"
+  const oversea = [
+    "https://routify", "-file", "-oversea",
+    ".oss-acdr-ut-1", ".aliyuncs.com/", "proxy_", "temp_file/production/x",
+  ].join("")
+  const accelerate = [
+    "https://routify", "-file", "-proxy",
+    ".oss-accelerate", ".aliyuncs.com/proxy/temp/x",
+  ].join("")
+  const cnBeijing = [
+    "https://routify", "-file", "-proxy",
+    ".oss-cn-beijing", ".aliyuncs.com/proxy/x",
+  ].join("")
+  const euIo = [
+    "https://routify", "-file", "-proxy-eu",
+    ".oss-eu-west-3", ".aliyuncs.io/proxy_temp_file/x",
+  ].join("")
+  for (const url of [oversea, accelerate, cnBeijing, euIo])
+    assert.equal(findBlocked({ format: "markdown", url })?.why, RELAY, url)
 })
 
 test("findBlocked(): passes legitimate and near-miss input", () => {

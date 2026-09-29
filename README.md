@@ -166,7 +166,7 @@ levels — against a small blocklist:
 | Pattern (case-insensitive)                                          | Catches                                                     |
 | ------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — 365 of the 371 recorded dials (as of 2026-09-27) |
-| `routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com` | the same relay bucket label on **any** Aliyun OSS endpoint form — public, dual-stack, internal (the 2 dual-stack-form dials + the 09-27 acceptance probe) |
+| `routify[\w.-]{0,12}file[\w.-]{0,56}aliyuncs[.](com|io)` | the relay bucket label family (`routify-file-*`: proxy/proxy-eu/oversea labels) on **any** Aliyun OSS endpoint form, public, dual-stack, internal, accelerate — TLD `.com` or `.io` (generalized 2026-09-28 after the surgery experiments below surfaced proxy-less labels and the `.io` variant) |
 
 A match throws — the tool never executes — with an error written to break the
 retry loop, not just fail the call:
@@ -198,16 +198,22 @@ dials re-synthesized it with independent fresh trace IDs. The model didn't
 fumble the host — it interpolated to the service's legitimate sibling
 endpoint. Rule 2 therefore matches the relay bucket label on *any* aliyuncs
 endpoint form, host-anchored (token and `aliyuncs.com` inside one host-shaped
-span), so code and prose merely mentioning the token still pass. A bare
-relay-host-token rule shipped earlier and was **removed 2026-09-26** for
-over-firing on token mentions (relay-ops code, incident writeups) and
-blocking self-documentation; its only remaining unique catch would be
-separator-mutated bucket labels (`routify_file_proxy...`) on aliyuncs hosts —
-re-add in the `BLOCKED` array of `plugin/block-proxy-artifacts.ts` if you
-ever see one:
+span), so code and prose merely mentioning the token still pass.
+**On 2026-09-28/29 the label itself proved to be one member of a family**
+(see Weights-level surgery below): with the n-gram ignition rows ablated,
+unshielded runs dialed the `oversea` label — which has **no `proxy` segment
+at all** — via `oss-accelerate`, `oss-cn-beijing` and `oss-acdr-ut-1`
+endpoints, and free-generated a `.io` TLD variant. Rule 2 was generalized
+the same day to any `routify…file…` label on `aliyuncs.com` or `aliyuncs.io`.
+A bare relay-host-token rule shipped earlier and was **removed 2026-09-26**
+for over-firing on token mentions (relay-ops code, incident writeups) and
+blocking self-documentation; since rule 2 absorbed proxy-less labels, the
+only shapes a token rule would still add are separator-mutated labels
+*missing the `file` segment* — re-add in the `BLOCKED` array of
+`plugin/block-proxy-artifacts.ts` if you ever see one:
 
 ```ts
-{ pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token (template variant)" },
+{ pattern: /routify[-_.](file|proxy|oversea)[\w.-]/i, why: "relay host token (template variant)" },
 ```
 
 The trade-off is deliberate under-inclusion of *unattested* shapes — with the opposite
@@ -255,7 +261,8 @@ the blocked host (see Limitations: a dead plugin dies silently).
 ## Reducing attempts (and why prompt rules are not the answer)
 
 The plugin fences the dial. Everything between the fence and the weights was
-tested:
+tested — and finally, on 2026-09-28, the weights themselves were operated
+on directly (see **Weights-level surgery** below):
 
 1. **Prompt rules: tested, rejected.** A standing AGENTS.md guard was
    A/B-controlled against the live trigger (see Validation). Both variants
@@ -290,6 +297,58 @@ tested:
     rate and rigidity, not the content. Higher precision should **reduce but
     not eliminate** spontaneous regurgitation (untested on the original
     Qwen3.8-Flash-Next — see the TODO under Reproducing the bug).
+
+## Weights-level surgery: we found the memory, ablated it — and it did not help (2026-09-28/29)
+
+Qwen3.8-Flash-Next carries a physical memory for surface strings: a
+**Predictive Look-ahead Embedding (PLE)** — a hashed 3-gram lookup table
+(16 sub-tables × 20 M rows × 160-dim BF16, ≈100 GB) injected at transformer
+layer 2 — and every quantizer ships that table **byte-identically**
+(quantizers only requantize the routed experts). The template is a
+near-deterministic completion: at temperature 0 from empty context,
+`https://rout` completes the incident host with mean logprob **−0.00**,
+where ordinary memorized URLs land at −0.4…−0.7 (`tools/repro.py --mode
+probe` — three tiny endpoint requests, seconds, no dialing).
+
+So we tried a vaccine. Full plan in [SURGERY.md](SURGERY.md); what happened,
+on a byte-verified fork (originals provably untouched; digest-pinned engine;
+the n-gram row-key hash reimplemented and cross-validated against the live
+CUDA kernel):
+
+| State | probe `https://rout` | raw unshielded agent runs ×2 | collateral (48-prompt greedy battery) |
+| --- | --- | --- | --- |
+| fork, tables intact | incident host, −0.00 | 0 and 0 (no failure wall that round) | baseline |
+| **all 128 table tensors zeroed** | generic URL, −0.88 | — | all memorized URL completions softened, as designed |
+| **240 rows zeroed** (template's relay-internal 3-grams; shared trigrams like `:`+`//`+`rout` deliberately untouched) | a real "Routify blog" site, −0.31 | **19 dials — never-before-seen shapes** | every non-relay prompt byte-identical |
+| **+144 more rows zeroed** (those new shapes) | garbage, −0.78 | **51 dials — further new shapes** | 46/48 identical; the 2 relay prompts invent a `.io` variant |
+
+The new shapes were full family members: `routify-file-proxy` on
+`oss-accelerate` and `oss-cn-beijing` endpoints, `routify-file-oversea`
+(no `proxy` segment anywhere) on `oss-acdr-ut-1`, and a
+`routify-file-proxy-eu`… on **`.aliyuncs.io`** — none of them present in the
+371 pre-surgery dials. And the unshielded runs **re-dialed the same URL
+after the 403** (19/26/25 unique URLs became 37/51/50 tool calls),
+independently confirming the retry loop the fence kills — the same behavior
+the external DGX Spark report had observed.
+
+**Verdict: the table is the igniter; the weights are the library.**
+Zeroing rows deterministically kills specific hard attractors — the
+structural collateral guarantee held *perfectly* (byte-identical outputs on
+every non-relay battery prompt, at every surgical state). The behavior
+didn't care: the URL *family* and the decision to reach for a "cached proxy
+copy" after a failure wall live in distributed LM weights, so enumerating
+rows to ablate cannot converge — each ablation redirects generation to the
+nearest unablated sibling (2× ablated rows → 2.6× dials: 19 → 51). A vaccine
+would have to enumerate a generative family; the fence, which blocks at the
+tool boundary where the generation lands, remains the only working control.
+Two genuine byproducts of a failed vaccine: it proved the ledger's
+one-shape concentration (365 of 371) was igniter dominance plus
+fence-feedback, not family rarity — unshielded decode shows a broad family;
+and it surfaced the three fence-escaping shapes that rule 2 now covers
+(above). During the experiment the fence faithfully over-fired exactly as
+documented: it blocked the surgery session's attempt to *write its own
+forensics file* (host-shaped strings in write payloads); the forensics were
+completed with non-breaking-hyphen breaks.
 
 ## Limitations (read before trusting it)
 
@@ -330,10 +389,11 @@ tested:
 
 ## Validation
 
-Measured against the real incidents plus controlled test runs (ledger: 371
-dials, 228 blocked, 143 reached the network, as of 2026-09-27 — of the 143,
-107 are deliberate unshielded dials from the reproducer's `--pure` raw mode
-below, by design; see Trend tracking for the rest):
+Measured against the real incidents plus controlled test runs (ledger: 441
+dials, 228 blocked, 213 reached the network, as of 2026-09-29 — of the 213,
+177 are deliberate unshielded dials from the reproducer's `--pure` raw mode
+below and the weight-surgery experiments, by design; see Trend tracking for
+the rest):
 
 | Scenario | Dials reaching network | Blocked by plugin |
 | --- | --- | --- |
@@ -343,6 +403,7 @@ below, by design; see Trend tracking for the rest):
 | Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
 | **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit (internal form blocked; token-in-prose and other-bucket pass) |
 | **Direct-to-model control (09-26)** — model endpoint reached directly, all 64 LLM steps log-confirmed on-provider; 2 crawl runs incl. subagents | **0** | **61/61** |
+| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; the ablated fork free-generated 3 fence-escaping shapes, so rule 2 was generalized the same day (see Weights-level surgery) | +70 new dials — all *deliberate* raw-mode leaks from the surgery runs, unshielded by design | **16/16** unit: oversea label, internal form and `.io` variant all blocked; prose and other-bucket pass |
 | **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
 **Attribution.** In the direct-to-model control the model spontaneously
@@ -402,9 +463,16 @@ real incidents, 5 in test/diagnostic windows (including the deliberate
 acceptance probe against an unroutable host, and 2 known analysis-heredoc
 self-counts), and 107 intentionally produced by the reproducer's `--pure`
 raw mode (that is the point of raw mode: the dials must reach the network).
-Watch the non-reproducer leaked column stay
-flat; blocked counts track exposure, not decay. The script docstring lists
-heuristic caveats (analysis heredocs quoting "curl" can self-count as dials).
+Ledger 2026-09-29: **441 dials / 228 blocked / 213 leaked** — the +70 are
+the deliberate unshielded dials of the weight-surgery raw runs (19, 26, 25
+unique URLs across three runs on the ablated fork, fence off by design; no
+new blocks, since `--pure` loads none). Two counting notes for anyone
+diffing against the live tracker: it counts tool *calls*, and the surgery
+runs re-dialed URLs after the 403 (19/26/25 URLs → 37/51/50 calls), and
+analysis-session heredocs quoting curl-or-regex text self-count as
+false-positive drift (documented in the script docstring) — quote the dated
+snapshots, not the running total. Watch the non-reproducer leaked column stay
+flat; blocked counts track exposure, not decay.
 
 ## Reproducing the bug
 

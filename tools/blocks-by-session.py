@@ -37,7 +37,9 @@ import sys
 # Fragment-built regexes keep this file invisible to the plugin it measures.
 # NETWORK_CLIENT is also fragment-built: ad-hoc analysis commands that merely
 # quote a curl-or-regex pattern must not self-classify as dial attempts.
-FINGERPRINT = re.compile(r"routify.{0,3}file.{0,3}proxy|proxy._temp_file", re.I)
+FINGERPRINT = re.compile(
+    r"routify.{0,3}file.{0,3}proxy|proxy._temp_file"
+    r"|routify[\w.-]{0,3}file[\w.-]{0,32}aliyuncs", re.I)
 NETWORK_CLIENT = re.compile(r"\bcu" + r"rl\b|\bw" + r"get\b|\bhtt" + r"pie\b|\bn" + r"c\b", re.I)
 POLICY = "Blocked by block-proxy-artifacts policy"
 

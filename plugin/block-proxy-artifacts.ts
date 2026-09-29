@@ -2,29 +2,33 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 // Hallucinated file-proxy artifact URLs. Small quantized Qwen models
 // regurgitate signed Aliyun OSS "file proxy" links from their pretraining
-// data. Across 371 recorded dials (as of 2026-09-27) every real attempt
-// targeted one relay bucket label, `routify-file-proxy-sg`, spelled in one of
-// Aliyun OSS's two DOCUMENTED endpoint formats:
-//   public     <bucket>.oss-<region>.aliyuncs.com   (365 dials)
-//   dual-stack <bucket>.<region>.oss.aliyuncs.com   (2 fabrications + 1 probe)
-// with only the trace/request/hash/date segments re-synthesized each time.
-// Rule 1 pins the exact incident host. Rule 2 covers the relay bucket label
-// on *any* OSS endpoint form (dual-stack, internal, ...) — the dual-stack
-// spelling is not a typo escape: it resolves in live DNS and is covered by a
-// CT-logged wildcard cert, i.e. a first-class sibling endpoint the model
-// interpolates to under load. The gap is bounded, and every span must be
-// host-shaped ([\w.-]), so code or prose that merely mentions the token
-// passes through.
+// data. 371 recorded dials (as of 2026-09-27) hit one relay bucket label,
+// `routify-file-proxy-sg`, in Aliyun OSS's two DOCUMENTED endpoint formats
+// (public `<bucket>.oss-<region>.aliyuncs.com`, dual-stack
+// `<bucket>.<region>.oss.aliyuncs.com`), re-synthesizing only the
+// trace/request/date segments each time.
+// The 2026-09-28/29 PLE n-gram row-ablation experiment (SURGERY.md; README
+// "Weights-level surgery") proved this is a TEMPLATE FAMILY, not one
+// memorized host: after the table rows carrying the canonical template were
+// zeroed, unshielded runs dialed 70 new URLs at never-before-observed
+// members — the `oversea` label (no "proxy" segment at all), the
+// `oss-accelerate`/`oss-cn-beijing`/`oss-acdr-ut-1` endpoint forms, and an
+// `aliyuncs.io` TLD variant. The family library lives in the LM weights,
+// so rule 2 must NOT require a "proxy" segment and must include Aliyun's
+// second TLD. Rule 1 still pins the exact incident host for provenance.
+// Every span must be host-shaped ([\w.-]) with bounded gaps and must end in
+// an aliyuncs TLD, so code or prose that merely mentions the token passes
+// through.
 //
 // Retired rules: a generic aliyuncs path rule (would block legitimate relay
 // operators' own proxy_temp_file objects, which can validly return 200) and
 // a bare relay-host-token rule (over-fires on relay-ops code and incident
-// writeups, and blocks self-documentation; its only unique catch beyond
-// rule 2 is separator-mutated bucket labels — re-add if ever observed:
-//   { pattern: /routify[-_.]file[-_.]proxy/i, why: "relay host token" }
-// Measurement deliberately stays broad: tools/blocks-by-session.py still
-// counts token-shaped mentions and leaks, so any novel shape this fence lets
-// through surfaces in the tracker.
+// writeups, and blocks self-documentation; since rule 2 widened to
+// proxy-less labels its only unique catches are separator-mutated labels
+// missing the `file` segment — re-add a suitably-shaped token rule if ever
+// observed). Measurement deliberately stays broad:
+// tools/blocks-by-session.py still counts token-shaped mentions and leaks,
+// so any novel shape this fence lets through surfaces in the tracker.
 //
 // Self-compatibility note: the regex sources below are deliberately written
 // with character classes so that this file's own text does not match the
@@ -40,7 +44,7 @@ import type { Plugin } from "@opencode-ai/plugin"
 
 const BLOCKED: { pattern: RegExp; why: string }[] = [
   { pattern: /routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com/i, why: "observed incident host (dead relay bucket)" },
-  { pattern: /routify[\w.-]{0,12}file[\w.-]{0,12}proxy[\w.-]{0,48}aliyuncs[.]com/i, why: "relay bucket label on an Aliyun OSS endpoint (any endpoint form)" },
+  { pattern: /routify[\w.-]{0,12}file[\w.-]{0,56}aliyuncs[.](com|io)/i, why: "relay bucket label (any routify-file-* form) on an Aliyun OSS endpoint, com or io TLD" },
 ]
 
 function* strings(v: unknown, depth = 0): Generator<string> {
