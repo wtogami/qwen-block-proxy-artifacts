@@ -61,7 +61,7 @@ are paid on every attempt the model chooses to emit. Treat the table above as
 the *fenced floor* — `tools/repro.py --mode raw` shows the unfenced version:
 42 dials in one crawl, every one reaching the network.
 
-### Field report — external reproduction on DGX Spark (2026-09-27)
+### Field report #1 — external reproduction on DGX Spark (2026-09-27)
 
 A DGX Spark (GB10) owner reproduced the bug independently:
 [Mia-AiLab/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Mia-AiLab/Qwen3.8-Flash-Next-NVFP4)
@@ -73,19 +73,25 @@ URL once after the 403** (four 403s total). Same-URL retry had never been
 observed with the fence up; unshielded, it appears immediately — exactly the
 retry loop the plugin's "Do NOT retry it" guidance targets.
 
-Three builds, one artifact:
+Four builds, one artifact:
 
 | Build | Quant author · format | Engine · spec-decode | Hardware | Role here |
 | ----- | --------------------- | -------------------- | -------- | --------- |
 | [garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream) | RadixArk · NVFP4 W4A4 | SGLang · native MTP | RTX 6000 Blackwell | earliest incidents (31 dials) + field capture |
 | [wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1](https://huggingface.co/wrldsuksgo2mars/Qwen3.8-Flash-Next-EXL3-K4.25-v1) | wrldsuksgo2mars · EXL3 ~4.25 bpw | vLLM · MTP(3) | RTX 6000 Blackwell | all plugin development + the 367-attempt cost data |
 | [Mia-AiLab/Qwen3.8-Flash-Next-NVFP4](https://huggingface.co/Mia-AiLab/Qwen3.8-Flash-Next-NVFP4) | local-inference-lab · NVFP4 (mirrored) | vLLM · FP8 KV · MTP(3) | DGX Spark GB10 | external reproduction (4 dials) |
+| [Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8) | **official vendor release** · fine-grained FP8 (block 128) | vLLM · FP8 weight path | 4× CMP 170HX GA100 rig · 256 GB · 1M ctx | external reproduction of the **vendor build** (~22 dials in the pasted run) |
 
-Three independent quant authors, two quant formats, two serving engines, two
-hardware classes — the identical artifact template every time. The template
-is base-model memorization; the quant author and hardware set the rate and
-the style (a 52-dial burst here vs. a two-URL pair with same-URL retries
-there).
+Four independent quant sources — three third-party authors plus the model
+vendor's own FP8 release — across three quant formats (NVFP4, EXL3, FP8),
+two serving engines, three hardware classes: the identical artifact template
+every time. The template is base-model memorization; author, format and
+hardware set dial *rate and style* (a 52-dial burst here, a two-URL pair
+with same-URL retries there, one URL re-dialed in five consecutive fetch
+batches on the FP8 rig). And the FP8 result caps the calibration story: a
+vendor quant whose own model card promises "performance metrics nearly
+identical to those of the original model" dials freely — aggressive
+quantization was never a precondition.
 
 Per-attempt cost, our measurements vs. their report:
 
@@ -101,8 +107,26 @@ compare emission+tool scales, not totals. The scales are consistent: emission is
 memory-bandwidth ratio between the machines — **the wall-clock cost of this
 bug scales with decode bandwidth**, so slower edge hardware pays
 proportionally more per confabulation. Their report confirms the NVFP4
-behavior class on public hub weights; the original-precision TODO below
-stays open.
+behavior class on public hub weights; field report #2 below narrows the
+open question to the BF16 original alone.
+
+### Field report #2 — the official FP8 release fires (2026-09-29)
+
+An external operator ran `tools/repro.py` (raw mode, `fetches=30`, 10 runs)
+against vLLM serving the **vendor's own** quantization,
+[Qwen/Qwen3.8-Flash-Next-FP8](https://huggingface.co/Qwen/Qwen3.8-Flash-Next-FP8)
+(fine-grained FP8, block 128 — "nearly identical" to the original per its
+model card), on a home-built rig of 4× NVIDIA CMP 170HX (GA100/Ampere
+mining silicon, VRAM-unlocked to 64 GB HBM2e each, 256 GB total, context
+extended to 1M tokens). The pasted run-1 excerpt shows ~22 dial events at a
+handful of canonical-shape fabrications — the *same trace IDs* re-dialed in
+fetch batches at +57, +66, +87, +108 and +123 s: the same-URL loop again,
+now observed unshielded by a third independent party. Caveats: we have one
+run of a 10-run batch, and Ampere has no native FP8 tensor cores (vLLM
+serves those weights through a dequant path) — but the weights are the
+official release, and they fired. **This closes the "only aggressive
+quantization fires" hope**; the original BF16 build is the only one left
+untested (see the TODO under Reproducing the bug).
 
 ## Why this exists (the incident)
 
@@ -283,24 +307,28 @@ on directly (see **Weights-level surgery** below):
    serving path, verified by smoke test, never by config alone. It also blinds
    the model to legitimate discussion of the incident on that alias (you could
    not edit this README from such a session).
- 3. **Calibration: rate, not cause.** Every observed firing came from an
-    aggressively quantized build of one model family: three public hub quants
-    by three independent authors (RadixArk's NVFP4 in the incidents,
-    wrldsuksgo2mars's EXL3 K4.25 in all plugin testing, local-inference-lab's
-    NVFP4 in an external DGX Spark reproduction), across two serving engines
-    (SGLang, vLLM) and two hardware classes (RTX 6000 Blackwell, DGX Spark
-    GB10). The identical template survives all of that, so it is weights-level
-    memorization of the base model — quant author and hardware set the leak
-    rate and rigidity, not the content. Higher precision should **reduce but
-    not eliminate** spontaneous regurgitation (untested on the original
-    Qwen3.8-Flash-Next — see the TODO under Reproducing the bug).
+ 3. **Calibration: rate, not cause — and the rate floor is low.** Every
+    observed firing comes from a quantized build of one model family: four
+    public hub quants — three by independent third-party authors (RadixArk's
+    NVFP4 in the incidents, wrldsuksgo2mars's EXL3 K4.25 in all plugin
+    testing, local-inference-lab's NVFP4 on an external DGX Spark) and,
+    since 2026-09-29, the vendor's own fine-grained FP8 release, externally
+    reproduced with `tools/repro.py` — across two serving engines and three
+    hardware classes. The identical template survives all of that, so it is
+    weights-level memorization of the base model; quantization modulates
+    expression, not content. FP8 — whose card advertises behavior "nearly
+    identical" to the original — already fires hard, so there is **no
+    evidence-backed reason to expect the original BF16 build to be clean**
+    (untested — see the TODO under Reproducing the bug).
 
 ## Weights-level surgery: we found the memory, ablated it — and it made things worse (2026-09-28/29)
 
 Qwen3.8-Flash-Next carries a physical memory for surface strings: a hashed
 3-gram **Predictive Look-ahead Embedding (PLE)** table injected at
-transformer layer 2 — and every quantizer ships that table
-**byte-identically** (quantizers only requantize the routed experts). The
+transformer layer 2 — the vendor's own model card confirms the anatomy
+("N-gram Embedding: 20,000,000 (bigrams/trigrams at layer 2)") — and every
+quantizer ships that table **byte-identically** (quantizers only requantize
+the routed experts). The
 template lives there as a near-deterministic completion: at temperature 0
 from empty context, `https://rout` completes the incident host with mean
 logprob **−0.00**, where ordinary memorized URLs land at −0.4…−0.7
@@ -496,34 +524,39 @@ BUG CONFIRMED: the model fabricated 42 dead-relay dials (42 reached the network 
 FENCE VERIFIED: 1 attempt, all blocked, none leaked.
 ```
 
-Honest expectations: every locally-recorded dial in the ledger comes from
-**aggressively quantized** public builds of **Qwen3.8-Flash-Next** — the
-RadixArk NVFP4 SSD-Stream build in the September incidents
-([garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream)),
-the EXL3 build named above in all testing — plus one **external**
-reproduction on an independently-authored NVFP4 quant (see the field
-report) — all under long-context + failure-wall load.
-No non-aggressive build of the original model has ever been put through this
-task here (the only other model ever served in this environment, a dense
-`qwen3.8:27b`, never had a load-heavy session). So
-a clean run on a healthy build would be *absence of evidence, not evidence
-of absence*. The decode lottery is real in the other direction too: our own
-aggressive build has produced 0 and 52 dials on consecutive attempts. Use
+Honest expectations: the ledger's locally recorded dials all come from
+**aggressively quantized** builds of **Qwen3.8-Flash-Next** under
+long-context + failure-wall load — the RadixArk NVFP4 SSD-Stream build
+([garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream](https://huggingface.co/garnermccloud/Qwen3.8-Flash-Next-NVFP4-SSD-Stream))
+in the September incidents and the EXL3 build named above in all testing.
+Externally, two more builds have since fired: an independently-authored
+NVFP4 quant on DGX Spark, and the **official FP8 release** on a 4-card
+Ampere rig (see the field reports). Only the original BF16 build is
+untested — never put through this task here, and the only other model ever
+served in this environment (a dense `qwen3.8:27b`) never had a load-heavy
+session. So a clean run on any given build remains *absence of evidence,
+not evidence of absence*: the decode lottery is real in both directions —
+our own aggressive build has produced 0 and 52 dials on consecutive
+attempts. Use
 `--runs 2-3` and keep the classified URLs with `--evidence out.jsonl`.
 Exit codes: 0 = confirmed/verified, 2 = not
 reproduced this round, 3 = fence leak. Please keep `--fetches` modest if you
 change `--site` — these are public servers.
 
-> **TODO (open question).** Run this reproducer `--mode raw` against the
-> *original* model build — the Qwen Cloud API serving **Qwen3.8-Flash-Next**
-> (addable as an `@ai-sdk/openai-compatible` custom provider) or a re-served
-> full-precision `Qwen3.8-Flash-Next` — under the same load. That would be
-> the first real test of
-> the calibration claim that quantization sets the leak rate (Reducing
-> attempts, item 3); today that claim rests entirely on aggressive builds.
-> Note the exposure: the base model lists **292 quantized derivatives** on
-> the hub, and every firing build so far — including the external one — is a
-> public download.
+> **TODO (narrowed 2026-09-29).** Run this reproducer against the original
+> BF16 [`Qwen/Qwen3.8-Flash-Next`](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) —
+> served locally or via the Qwen Cloud API (addable as an
+> `@ai-sdk/openai-compatible` custom provider). Two cheap steps:
+> `--mode probe` first (three tiny requests; the prediction is the incident
+> host completing `https://rout` at mean logprob −0.00, since the n-gram
+> table that carries it has shipped byte-identically in every build ever
+> inspected, the official FP8 included), then `--mode raw --runs 3` for the
+> spontaneous rate. Field report #2 left only this build untested: a vendor
+> quant advertising "nearly identical" behavior already fires, so the
+> expectation for BF16 is **same attractor; rate under load unknown, not
+> presence**. Exposure note, refreshed 2026-09-29: **305 quantized
+derivatives** (up from 292 four days ago) on the hub, all public downloads — and the firing list now includes the official
+> release itself.
 
 ## Development
 

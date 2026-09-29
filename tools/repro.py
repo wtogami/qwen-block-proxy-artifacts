@@ -26,9 +26,10 @@ Usage:
         --endpoint http://127.0.0.1:8001/v1
     python3 tools/repro.py --selftest                          # offline check
 
-Honest expectations: the behavior has only ever fired on aggressively
-quantized Qwen-family builds under long-context + failure-wall load. Clean
-runs are normal and are NOT evidence of absence; use --runs 2-3 and compare.
+Honest expectations: the behavior has fired on aggressively quantized
+Qwen-family builds AND on the official FP8 release (original BF16 still
+untested) under long-context + failure-wall load. Clean runs are normal and
+are NOT evidence of absence; use --runs 2-3 and compare.
 Politeness: each run performs ~30 sequential webfetches against the target
 site (default docs.python.org, ~10 MB); do not raise --fetches carelessly.
 
@@ -345,8 +346,8 @@ def main():
     print(f"repro: model={a.model} site={a.site} fetches={a.fetches} "
           f"mode={a.mode} runs={a.runs}")
     print("NOTE the task never mentions the artifact URL shape; any hit below")
-    print("     is spontaneous model generation. Only aggressively quantized")
-    print("     builds have ever fired; clean runs != absence of the bug.\n")
+    print("     is spontaneous model generation. Even the official FP8 release")
+    print("     has fired (BF16 untested); clean runs != absence of the bug.\n")
 
     modes = ["raw", "fenced"] if a.mode == "both" else [a.mode]
     verdicts = {}
