@@ -68,7 +68,7 @@ A DGX Spark (GB10) owner reproduced the bug independently:
 (an NVFP4 quant authored by local-inference-lab; the Mia-AiLab repo is a
 mirror), served by vLLM with FP8 KV cache and MTP(3) speculative decoding,
 driven by OpenCode 2.0.18, no blocking plugin. The model fabricated two
-signed URLs, fetched both, and — a new behavioral datum — **retried each same
+signed URLs, fetched both, and — a new behavioral datum — **retried the same
 URL once after the 403** (four 403s total). Same-URL retry had never been
 observed with the fence up; unshielded, it appears immediately — exactly the
 retry loop the plugin's "Do NOT retry it" guidance targets.
@@ -166,7 +166,7 @@ levels — against a small blocklist:
 | Pattern (case-insensitive)                                          | Catches                                                     |
 | ------------------------------------------------------------------- | ----------------------------------------------------------- |
 | `routify[-]file[-]proxy[-]sg[.]oss-ap-southeast-1[.]aliyuncs[.]com` | the exact incident host — 365 of the 371 recorded dials (as of 2026-09-27) |
-| `routify[\w.-]{0,12}file[\w.-]{0,56}aliyuncs[.](com|io)` | the relay bucket label family (`routify-file-*`: proxy/proxy-eu/oversea labels) on **any** Aliyun OSS endpoint form, public, dual-stack, internal, accelerate — TLD `.com` or `.io` (generalized 2026-09-28 after the surgery experiments below surfaced proxy-less labels and the `.io` variant) |
+| `routify[\w.-]{0,12}file[\w.-]{0,56}aliyuncs[.](com|io)` | the relay bucket label family (`routify-file-*`: proxy/proxy-eu/oversea labels) on **any** Aliyun OSS endpoint form, public, dual-stack, internal, accelerate — TLD `.com` or `.io` (generalized 2026-09-29 after the surgery experiments below surfaced proxy-less labels and the `.io` variant) |
 
 A match throws — the tool never executes — with an error written to break the
 retry loop, not just fail the call:
@@ -315,7 +315,7 @@ on a byte-verified fork (originals provably untouched; digest-pinned engine;
 the n-gram row-key hash reimplemented and cross-validated against the live
 CUDA kernel):
 
-| State | probe `https://rout` | raw unshielded agent runs ×2 | collateral (48-prompt greedy battery) |
+| State | probe `https://rout` | raw unshielded agent runs | collateral (48-prompt greedy battery) |
 | --- | --- | --- | --- |
 | fork, tables intact | incident host, −0.00 | 0 and 0 (no failure wall that round) | baseline |
 | **all 128 table tensors zeroed** | generic URL, −0.88 | — | all memorized URL completions softened, as designed |
@@ -351,7 +351,7 @@ identical trigger, 8 raw runs per arm, shapes =
 | blocked dials | 253 | 184 |
 | unique dial shapes | **2 — flat from run 3** (reproduces the 365+2 ledger exactly) | **9, novelty still positive in runs 7–8; 13 observed members, still growing** |
 | canonical shape | dominant | **zero occurrences** |
-| dial egress | 0 | 0 (run audit: crawl fetches were the only external traffic) |
+| data to third parties | 0 | 0 — escaped mutants dialed nonexistent hosts; run audit: crawl fetches were the only external traffic that connected |
 
 Both pre-registered readings hit, in opposite directions:
 
@@ -375,7 +375,7 @@ Both pre-registered readings hit, in opposite directions:
 production model, two host-anchored rules cover the whole dial space:
 253/253 blocked, zero egress — the fence is a complete shield precisely
 *because* the model is concentrated. Against the ablated model the same
-fence **leaks**: several R3 mutants (e.g. `routify-file-s10` on a
+fence **leaks**: some R3 mutants (e.g. `routify-file-s10` on a
 `…-sg-new.com` host — not even on `aliyuncs`) match no host-anchored rule,
 and the novelty curve proves any rule list chasing them cannot converge.
 Zero benefit, strictly worse protection. The vaccine is abandoned on two
@@ -434,10 +434,10 @@ the rest):
 | Enforcement probes post-install (fetch, bash, a `question` call quoting the host) | 0 | **4/4** |
 | **Live field catch** — successor research session, spontaneous (no priming) | **0** | **5/5** |
 | Narrowed single-rule build probes (09-26) | 0 (deliberate variant-host probe passed through, NXDOMAIN, by design) | **1/1** incident-shape blocked |
-| **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit (internal form blocked; token-in-prose and other-bucket pass) |
+| **Endpoint-format upgrade (09-27)** — rule 2 added after forensics showed the 2 dual-stack-form dials are a documented, DNS-live, CT-certed sibling endpoint; live probe fetched the dual-stack shape | **0** | **1/1** + 15/15 unit at the time (internal form blocked; token-in-prose and other-bucket pass) |
 | **Direct-to-model control (09-26)** — model endpoint reached directly, all 64 LLM steps log-confirmed on-provider; 2 crawl runs incl. subagents | **0** | **61/61** |
-| **Fence generalization (09-29)** — the surgery's ablated fork free-generated 3 fence-escaping shapes (oversea label, internal form, `.io`); rule 2 broadened same day | surfaced by test, not a live window | 0 | **16/16** unit: all three escaped shapes blocked; prose and other-bucket pass |
-| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; probe + raw runs + battery, then the two-arm novelty test (`--keep-fence`) | 70 raw-mode leaks + 437 novelty-test dials | **70 leaked by design** (raw = shield off); **novelty ORIG: 253/253 blocked — two rules cover 100% of the production dial space**; R3: zero egress, escaping mutants hit nonexistent hosts | ablation makes protection worse; vaccine abandoned — see Weights-level surgery |
+| **Fence generalization (09-29)** — the surgery's ablated fork free-generated 3 fence-escaping shapes (oversea label, internal form, `.io`); rule 2 broadened same day | 0 (unit-tested shapes, not a live window) | **16/16** unit: all three escaped shapes blocked; prose and other-bucket pass |
+| **Weights-level surgery (09-28/29)** — PLE n-gram row ablation on a byte-verified fork; probe + raw runs + battery, then the two-arm novelty test (`--keep-fence`); verdict: ablation makes protection worse, vaccine abandoned — see Weights-level surgery | 70 leaked by design (raw = shield off); in the novelty arms, escaping mutants dialed only nonexistent hosts | **437 blocked** (253 ORIG + 184 R3; ORIG 253/253 — two rules cover 100% of the production dial space) |
 | **Reproducer A/B (09-27)** — `tools/repro.py` raw (`--pure`) vs fenced, same trigger task, quantized local build | raw: **107/107** (all 403); fenced: **0** | fenced: **31/31** |
 
 **Attribution.** In the direct-to-model control the model spontaneously
@@ -517,6 +517,7 @@ sessions and classifies every artifact-shaped URL the model produces:
 
 ```bash
 python3 tools/repro.py --model <provider/model>     # raw + fenced pass
+python3 tools/repro.py --model <provider/model> --mode probe  # 3-request memorization probe, no dialing
 python3 tools/repro.py --selftest                   # offline classifier check
 ```
 
@@ -586,8 +587,9 @@ npm run typecheck  # tsc --noEmit
 npm run repro:selftest  # offline check of tools/repro.py's classifier
 ```
 
-Test coverage: single-rule blocklist semantics (exact incident host,
-case-insensitivity, deliberate variant-host pass-through), near-miss
+Test coverage: both rules (exact incident host; the `routify-file-*` host
+family — oversea label, internal endpoint, `.io` variant all blocked),
+case-insensitivity, near-miss
 pass-through (legit OSS buckets, a relay operator's signed `proxy_temp_file`
 export, "Routify" the company), depth-cap boundaries, object-key scanning,
 empty/odd argument shapes, the exact incident call shapes (webfetch, MCP
