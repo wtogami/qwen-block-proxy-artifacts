@@ -337,8 +337,8 @@ kills specific hard attractors, and the structural collateral guarantee held
 every surgical state. The behavior didn't care: kill the route and the model
 dials a mutant of it.
 
-**The final experiment: a pre-registered two-arm NOVELTY TEST** (later the
-same day; full report in `NOVELTY-TEST.md`). If the relay family is
+**The final experiment: a pre-registered two-arm novelty test**, run later
+the same day. If the relay family is
 enumerable, a vaccine — or a fence rule-set — could cover it; if it is
 generative, neither can. Protocol: fence enabled on both arms
 (`tools/repro.py --keep-fence` — blocked dials still count, no dial egress),
@@ -382,16 +382,6 @@ Zero benefit, strictly worse protection. The vaccine is abandoned on two
 independent grounds (G5 breadth; novelty redirection). The `…-sg-new` class
 stays deliberately *unfenced* — chasing family members was just proven
 unconvergeable, and the ORIG arm shows production never emits them.
-
-Byproducts that remain: the three fence-escaping shapes rule 2 now covers
-(above) — host-anchored, because enumerating family members does not
-converge — and a fence that faithfully over-fired exactly as documented: it
-blocked the surgery session's attempt to *write its own forensics file*
-(host-shaped strings in write payloads); the forensics were completed with
-non-breaking-hyphen breaks. The fork was restored byte-pristine (384/384
-zero spans reverted) and the production engine runs on original weights;
-full forensics under `/home/opencode/ple-surgery-fork/` (`G2-NOTES.md`,
-`G3-G4-NOTES.md`, `NOVELTY-TEST.md`, `G5-VERDICT.md`).
 
 ## Limitations (read before trusting it)
 
