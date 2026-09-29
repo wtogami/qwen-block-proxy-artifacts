@@ -3,7 +3,7 @@
 An [opencode](https://opencode.ai) plugin that hard-blocks **hallucinated
 file-proxy artifact URLs** before any tool dials out.
 
-Qwen models have been observed fabricating signed Aliyun OSS "file proxy"
+Qwen 3.8 Flash Next has been observed fabricating signed Aliyun OSS "file proxy"
 links — like
 
 ```text
@@ -532,9 +532,8 @@ in the September incidents and the EXL3 build named above in all testing.
 Externally, two more builds have since fired: an independently-authored
 NVFP4 quant on DGX Spark, and the **official FP8 release** on a 4-card
 Ampere rig (see the field reports). Only the original BF16 build is
-untested — never put through this task here, and the only other model ever
-served in this environment (a dense `qwen3.8:27b`) never had a load-heavy
-session. So a clean run on any given build remains *absence of evidence,
+untested — never put through this task here. So a clean run on any given
+build remains *absence of evidence,
 not evidence of absence*: the decode lottery is real in both directions —
 our own aggressive build has produced 0 and 52 dials on consecutive
 attempts. Use
