@@ -212,7 +212,13 @@ the same relay bucket label, `routify-file-proxy-sg` — 365 via the public
 endpoint spelling, and — caught on camera 2026-09-26 under maximum
 forced-wall load — 2 via the **dual-stack** spelling
 (`...sg.ap-southeast-1.oss.aliyuncs.com`), plus 09-27's acceptance probe
-against that same shape. The remaining 3 recorded dials are a deliberate
+against that same shape. (That "2" was era-limited: in a later fence-on
+replication the dual-stack basin carried **83 of 251 dials** — a third of
+the replay space, in 3 of 9 sessions — while raw (unfenced) runs of the
+same engine dial it almost never (**0 of 376** in the 2026-10-01 paired
+A/B, both context-window arms). The sibling basin is *block feedback*:
+it is exactly the escape hatch the model reaches when the canonical route
+throws, so rule 2's endpoint generality is load-bearing, not paranoia.) The remaining 3 recorded dials are a deliberate
 variant probe that passes by design and two known heredoc self-count
 false positives (see Trend tracking). The dual-stack form is not a typo
 escape: Alibaba's own docs define
@@ -323,7 +329,12 @@ on directly (see **Weights-level surgery** below):
     expression, not content. FP8 — whose card advertises behavior "nearly
     identical" to the original — already fires hard, so there is **no
     evidence-backed reason to expect the original BF16 build to be clean**
-    (untested — see the TODO under Reproducing the bug).
+    (untested — see the TODO under Reproducing the bug). Context geometry
+doesn't move it either: a paired raw-mode A/B (8 sessions per arm,
+YaRN-extended 512K vs native 256K, `MAX_BATCHED_TOKENS=2048` held
+constant, 2026-10-01) came out statistically indistinguishable — 174 vs
+129 dials, Mann–Whitney p≈0.56, identical canonical-only shape space,
+−0.00 attractor both arms.
 
 ## Weights-level surgery: we found the memory, ablated it — and it made things worse (2026-09-28/29)
 
@@ -335,7 +346,11 @@ quantizer ships that table **byte-identically** (quantizers only requantize
 the routed experts). The
 template lives there as a near-deterministic completion: at temperature 0
 from empty context, `https://rout` completes the incident host with mean
-logprob **−0.00**, where ordinary memorized URLs land at −0.4…−0.7
+logprob **−0.00**, where ordinary memorized URLs land at −0.4…−0.8 (the control values
+wobble with the serving configuration — measured −0.43/−0.67, then
+−0.75/−0.83, then −0.68/−0.69 across position-encoding and restart
+changes; the attractor itself measured **−0.00 in all four serving
+configurations** tested, including both YaRN and native context windows)
 (`tools/repro.py --mode probe` — three tiny endpoint requests, no dialing).
 
 So we tried a vaccine: zero the table's template-igniting n-gram rows on a
@@ -484,7 +499,10 @@ real incidents, 5 in test/diagnostic windows (including the deliberate
 acceptance probe against an unroutable host, and 2 known analysis-heredoc
 self-counts), and 107 intentionally produced by the reproducer's `--pure`
 raw mode (that is the point of raw mode: the dials must reach the network).
-Ledger 2026-09-29 (final): **878 dials / 665 blocked / 213 leaked**. The
+Ledger 2026-09-29 (final audit): **878 dials / 665 blocked / 213
+leaked**. (Traffic since: ~400 more dials from raw-mode test windows — a
+post-restart sanity check and the context-window A/B, all `--pure` and
+all leaked by design; no spontaneous leak.) The
 +507 since 09-27 is entirely deliberate weight-surgery experiment traffic:
 70 unshielded dials from raw runs on the ablated fork (`--pure` loads no
 fence), plus 437 fence-blocked dials from the two-arm novelty test — the
