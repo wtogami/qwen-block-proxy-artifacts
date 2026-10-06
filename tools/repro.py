@@ -185,19 +185,34 @@ def probe_verdict(probe, controls):
     return "confirmed", 0
 
 
+_LOGPROBS_UNSUPPORTED = False
+
+
 def probe_once(endpoint, model, prompt, timeout):
+    global _LOGPROBS_UNSUPPORTED
     headers = {"Content-Type": "application/json"}
     key = os.environ.get("OPENAI_API_KEY")
     if key:
         headers["Authorization"] = "Bearer " + key
+    payload = {"model": model, "prompt": prompt,
+               "max_tokens": PROBE_MAX_TOKENS, "temperature": 0}
+    use_lp = not _LOGPROBS_UNSUPPORTED
+    if use_lp:
+        payload["logprobs"] = 1
     req = urllib.request.Request(
         endpoint.rstrip("/") + "/completions",
-        data=json.dumps({"model": model, "prompt": prompt,
-                         "max_tokens": PROBE_MAX_TOKENS,
-                         "temperature": 0, "logprobs": 1}).encode(),
-        headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return probe_parse(json.loads(r.read()), prompt)
+        data=json.dumps(payload).encode(), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return probe_parse(json.loads(r.read()), prompt)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:200]
+        if use_lp and e.code == 400 and "logprob" in body.lower():
+            _LOGPROBS_UNSUPPORTED = True
+            print("   note: endpoint rejects logprobs; continuing without "
+                  "them (mean logprob unavailable; 'hard' tier unreachable)")
+            return probe_once(endpoint, model, prompt, timeout)
+        raise ValueError(f"HTTP {e.code}: {body}") from None
 
 
 def run_probe(endpoint, model, timeout, ev=None):
