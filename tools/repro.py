@@ -242,22 +242,53 @@ def probe_verdict(probe, controls):
     return "confirmed", 0
 
 
+_LOGPROBS_UNSUPPORTED = False
+
+
 def probe_once(endpoint, model, prompt, timeout):
+    global _LOGPROBS_UNSUPPORTED
     headers = {"Content-Type": "application/json"}
     key = os.environ.get("OPENAI_API_KEY")
     if key:
         headers["Authorization"] = "Bearer " + key
+    payload = {"model": model, "prompt": prompt,
+               "max_tokens": PROBE_MAX_TOKENS, "temperature": 0}
+    use_lp = not _LOGPROBS_UNSUPPORTED
+    if use_lp:
+        payload["logprobs"] = 1
     req = urllib.request.Request(
         endpoint.rstrip("/") + "/completions",
-        data=json.dumps({"model": model, "prompt": prompt,
-                         "max_tokens": PROBE_MAX_TOKENS,
-                         "temperature": 0, "logprobs": 1}).encode(),
-        headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return probe_parse(json.loads(r.read()), prompt)
+        data=json.dumps(payload).encode(), headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return probe_parse(json.loads(r.read()), prompt)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")[:200]
+        if use_lp and e.code == 400 and "logprob" in body.lower():
+            _LOGPROBS_UNSUPPORTED = True
+            print("   note: endpoint rejects logprobs; continuing without "
+                  "them (mean logprob unavailable; 'hard' tier unreachable)")
+            return probe_once(endpoint, model, prompt, timeout)
+        raise ValueError(f"HTTP {e.code}: {body}") from None
+
+
+def probe_resolve_model(endpoint, model, timeout):
+    """Servers may register slashful ids (HF/Ollama style: Qwen/...); the
+    opencode provider/model prefix must not be stripped in that case."""
+    try:
+        with urllib.request.urlopen(endpoint.rstrip("/") + "/models",
+                                    timeout=timeout) as r:
+            ids = [m.get("id") for m in json.loads(r.read()).get("data") or []]
+    except (urllib.error.URLError, OSError, ValueError):
+        return model  # can't ask; keep today's strip-onwards behaviour
+    for cand in (model, model.rsplit("/", 1)[-1]):
+        if cand in ids:
+            return cand
+    return model
 
 
 def run_probe(endpoint, model, timeout, ev=None):
+    model = probe_resolve_model(endpoint, model, timeout)
     print(f"probe: endpoint={endpoint} model={model} temp=0 "
           f"max_tokens={PROBE_MAX_TOKENS} — 3 tiny requests, no external network")
     try:
@@ -444,8 +475,7 @@ def main():
             ap.error("--mode probe requires --endpoint")
         ev = open(a.evidence, "a") if a.evidence else None
         try:
-            return run_probe(a.endpoint, a.model.rsplit("/", 1)[-1],
-                             min(a.timeout, 120), ev)
+            return run_probe(a.endpoint, a.model, min(a.timeout, 120), ev)
         finally:
             if ev:
                 ev.close()
